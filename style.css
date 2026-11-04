@@ -1,0 +1,688 @@
+/* ============================================================
+   VapeCatalog — тёмная «вейп-эстетика» (дизайн v2)
+   Неоновые акценты, мягкие свечения, поддержка темы Telegram,
+   адаптивная сетка 2/3/4 колонки
+   ============================================================ */
+
+:root {
+  /* Неоновые акценты */
+  --accent: #00e5c3;
+  --accent-2: #ff4fa3;
+  --accent-3: #19c7ff;
+
+  /* Фоны и текст (фоллбэки для Telegram-темы) */
+  --bg: #0d0b1a;
+  --bg-2: #171329;
+  --card-bg: rgba(255, 255, 255, 0.055);
+  --card-border: rgba(255, 255, 255, 0.10);
+  --text: #f2f0fa;
+  --muted: #9d96bd;
+  --danger: #ff5d6c;
+
+  /* Telegram-тема (значения переопределяются из app.js через themeParams) */
+  --tg-theme-bg-color: var(--bg);
+  --tg-theme-secondary-bg-color: var(--bg-2);
+  --tg-theme-text-color: var(--text);
+  --tg-theme-hint-color: var(--muted);
+  --tg-theme-button-color: var(--accent);
+  --tg-theme-button-text-color: #08131a;
+  --tg-theme-link-color: var(--accent);
+  --tg-theme-destructive-text-color: var(--danger);
+
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow-card: 0 0 24px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.28);
+  --shadow-card-hover: 0 0 32px rgba(0, 229, 195, 0.16), 0 16px 36px rgba(0, 0, 0, 0.46);
+  --t-fast: 180ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.45;
+  color: var(--tg-theme-text-color, var(--text));
+  background-color: var(--tg-theme-bg-color, var(--bg));
+  background-image:
+    radial-gradient(980px 540px at 88% -12%, rgba(255, 79, 163, 0.17), transparent 60%),
+    radial-gradient(880px 480px at -12% 18%, rgba(0, 229, 195, 0.15), transparent 60%),
+    radial-gradient(720px 420px at 105% 95%, rgba(25, 199, 255, 0.10), transparent 60%),
+    radial-gradient(ellipse at 50% 42%, transparent 56%, rgba(4, 3, 12, 0.55) 100%);
+  background-attachment: fixed;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  -webkit-font-smoothing: antialiased;
+}
+
+body.has-cart {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 215px);
+}
+
+/* Тонкий полупрозрачный скроллбар */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 229, 195, 0.38);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ===== Шапка (липкая) ===== */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(13, 11, 26, 0.86);
+  background: color-mix(in srgb, var(--tg-theme-bg-color, var(--bg)) 86%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--card-border);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+}
+
+.header-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-titles h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  background: linear-gradient(90deg, var(--accent), var(--accent-3), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--tg-theme-hint-color, var(--muted));
+}
+
+.cart-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 0 14px rgba(0, 229, 195, 0.12);
+  transition: transform var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+
+.cart-button:active {
+  transform: scale(0.94);
+}
+
+.cart-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #08131a;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgba(0, 229, 195, 0.55);
+}
+
+/* ===== Контент ===== */
+.main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 16px 16px 0;
+}
+
+/* Поиск */
+.search-section {
+  margin-bottom: 14px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 14px 18px;
+  font-size: 1rem;
+  color: var(--tg-theme-text-color, var(--text));
+  background: var(--tg-theme-secondary-bg-color, var(--bg-2));
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  outline: none;
+  transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+
+.search-input::placeholder {
+  color: var(--tg-theme-hint-color, var(--muted));
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 229, 195, 0.16), 0 0 20px rgba(0, 229, 195, 0.28);
+}
+
+/* Чипы категорий */
+.chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 12px 2px 4px;
+  scrollbar-width: none;
+}
+
+.chips::-webkit-scrollbar {
+  display: none;
+}
+
+.chip {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--tg-theme-hint-color, var(--muted));
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: color var(--t-fast) ease, background var(--t-fast) ease,
+    border-color var(--t-fast) ease, box-shadow var(--t-fast) ease, transform var(--t-fast) ease;
+}
+
+.chip:active {
+  transform: scale(0.95);
+}
+
+.chip.active {
+  color: #041712;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  border-color: transparent;
+  box-shadow: 0 0 18px rgba(0, 229, 195, 0.45), 0 4px 16px rgba(0, 229, 195, 0.25);
+}
+
+/* ===== Сетка карточек: мобильное 2, планшет 3, десктоп 4 ===== */
+.catalog {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+@media (min-width: 640px) {
+  .catalog {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .catalog {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ===== Карточка товара ===== */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  background: var(--tg-theme-secondary-bg-color, var(--card-bg));
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  transition: transform var(--t-fast) ease, box-shadow var(--t-fast) ease, border-color var(--t-fast) ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: rgba(0, 229, 195, 0.28);
+}
+
+.card:active {
+  transform: scale(0.985);
+}
+
+.card.unavailable {
+  opacity: 0.55;
+  filter: saturate(0.6);
+}
+
+/* Шапка карточки: фирменный градиент-подложка под эмодзи/фото */
+.card-media {
+  position: relative;
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(120% 150% at 18% 0%, rgba(0, 229, 195, 0.20), transparent 55%),
+    radial-gradient(120% 150% at 85% 112%, rgba(255, 79, 163, 0.22), transparent 55%),
+    linear-gradient(145deg, rgba(0, 229, 195, 0.10), rgba(25, 199, 255, 0.06), rgba(255, 79, 163, 0.10));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.card-emoji {
+  font-size: 3rem;
+  line-height: 1;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45));
+}
+
+.card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Бейджи: «-20%» красным, «хит» золотым */
+.badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.badge-sale {
+  color: #ffffff;
+  background: linear-gradient(135deg, #ff3b5c, #ff7a3d);
+  box-shadow: 0 4px 14px rgba(255, 59, 92, 0.5);
+}
+
+.badge-hot {
+  color: #3b2700;
+  background: linear-gradient(135deg, #ffdb70, #ffb300);
+  box-shadow: 0 4px 14px rgba(255, 190, 40, 0.5);
+}
+
+.card-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.card-brand {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--tg-theme-hint-color, var(--muted));
+}
+
+.card-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-price {
+  font-size: 1.06rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-shadow: 0 0 18px rgba(0, 229, 195, 0.35);
+}
+
+.card-old-price {
+  font-size: 0.8rem;
+  color: var(--tg-theme-hint-color, var(--muted));
+  text-decoration: line-through;
+}
+
+.card-controls {
+  margin-top: auto;
+}
+
+/* Кнопка «+» добавления */
+.add-btn {
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #06170f;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  border-radius: 12px;
+  box-shadow: 0 0 18px rgba(0, 229, 195, 0.45), 0 6px 18px rgba(0, 229, 195, 0.22);
+  transition: transform var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+
+.add-btn:hover {
+  box-shadow: 0 0 28px rgba(0, 229, 195, 0.6), 0 8px 22px rgba(0, 229, 195, 0.3);
+}
+
+.add-btn:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Степпер +/− с крупными тач-зонами (min 44px) в стиле неона */
+.qty-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 2px;
+  border: 1px solid rgba(0, 229, 195, 0.35);
+  border-radius: 14px;
+  background: rgba(0, 229, 195, 0.06);
+  box-shadow: inset 0 0 14px rgba(0, 229, 195, 0.10);
+}
+
+.qty-btn {
+  min-width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--accent);
+  border-radius: 11px;
+  background: rgba(0, 229, 195, 0.14);
+  border: 1px solid rgba(0, 229, 195, 0.25);
+  box-shadow: 0 0 12px rgba(0, 229, 195, 0.18);
+  transition: background var(--t-fast) ease, box-shadow var(--t-fast) ease, transform var(--t-fast) ease;
+}
+
+.qty-btn:active {
+  transform: scale(0.92);
+  background: rgba(0, 229, 195, 0.28);
+  box-shadow: 0 0 18px rgba(0, 229, 195, 0.4);
+}
+
+.qty-count {
+  flex: 1;
+  text-align: center;
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--tg-theme-text-color, var(--text));
+}
+
+/* Заглушка по высоте у заблокированных карточек */
+.qty-row.holder {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: none;
+}
+
+/* Оверлей «Нет в наличии» (ставится из app.js) */
+.sold-out-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  background: rgba(8, 6, 16, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+/* ===== Пустой стейт ===== */
+.empty-state {
+  text-align: center;
+  padding: 56px 16px;
+  color: var(--tg-theme-hint-color, var(--muted));
+}
+
+.empty-emoji {
+  font-size: 4rem;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 10px 26px rgba(255, 79, 163, 0.35));
+}
+
+.empty-state > p {
+  margin: 6px 0;
+  font-size: 1.15rem;
+  color: var(--tg-theme-text-color, var(--text));
+  font-weight: 800;
+}
+
+.empty-sub {
+  font-size: 0.92rem !important;
+  font-weight: 500 !important;
+  color: var(--tg-theme-hint-color, var(--muted)) !important;
+}
+
+/* Ошибка загрузки данных */
+.error-box {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 48px 16px;
+  border: 1px dashed rgba(255, 93, 108, 0.4);
+  border-radius: var(--radius);
+  background: rgba(255, 93, 108, 0.06);
+  box-shadow: var(--shadow-card);
+}
+
+.error-emoji {
+  font-size: 2.6rem;
+}
+
+.error-box p {
+  margin: 6px 0 0;
+  font-weight: 700;
+}
+
+.error-sub {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--tg-theme-hint-color, var(--muted));
+}
+
+/* ===== Панель заказа (липкая снизу) ===== */
+.cart-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  background: var(--tg-theme-bg-color, var(--bg));
+  background: color-mix(in srgb, var(--tg-theme-bg-color, var(--bg)) 93%, transparent);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(0, 229, 195, 0.4);
+  box-shadow: 0 -12px 44px rgba(0, 0, 0, 0.5), 0 0 40px rgba(0, 229, 195, 0.10);
+  transform: translateY(105%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.32s ease, opacity 0.32s ease;
+}
+
+.cart-bar.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cart-title {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.clear-button {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--tg-theme-destructive-text-color, var(--danger));
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: background var(--t-fast) ease;
+}
+
+.clear-button:active {
+  background: rgba(255, 93, 108, 0.14);
+}
+
+.cart-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cart-item {
+  font-size: 0.95rem;
+  color: var(--tg-theme-text-color, var(--text));
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--tg-theme-secondary-bg-color, rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cart-total-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1rem;
+}
+
+.cart-total-row span:last-child {
+  font-weight: 800;
+  font-size: 1.12rem;
+  color: var(--accent);
+}
+
+/* Кнопка «Отправить заказ» — градиент со свечением */
+.send-button {
+  width: 100%;
+  height: 52px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #08131a;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3), var(--accent-2));
+  border-radius: 14px;
+  box-shadow: 0 0 28px rgba(255, 79, 163, 0.4), 0 0 18px rgba(0, 229, 195, 0.3),
+    0 8px 24px rgba(0, 0, 0, 0.3);
+  transition: transform var(--t-fast) ease, box-shadow var(--t-fast) ease, filter var(--t-fast) ease;
+}
+
+.send-button:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 0 36px rgba(255, 79, 163, 0.55), 0 0 22px rgba(0, 229, 195, 0.4),
+    0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.send-button:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* ===== Тост (снизу, тёмный, автоскрытие из app.js) ===== */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 115px);
+  z-index: 80;
+  max-width: min(420px, calc(100vw - 32px));
+  width: max-content;
+  padding: 13px 20px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--tg-theme-text-color, var(--text));
+  background: rgba(20, 16, 38, 0.94);
+  background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #141026) 94%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 229, 195, 0.45);
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 229, 195, 0.12);
+  transform: translate(-50%, 20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+
+.toast.show {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+@media (min-width: 1024px) {
+  .toast {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 160px);
+  }
+}
