@@ -2,7 +2,20 @@
 
 /* ===== Настройки ===== */
 const CONFIG = {
-  contactUsername: 'g179p' + '?text=Приветствую ' + '{lines}', // Telegram-username продавца, без «@»
+  contactUsername: 'g179p' + '?text=Приветствую ' + {
+  const lines = ['Заказ:'];
+  let index = 0;
+  state.cart.forEach((qty, id) => {
+    const product = state.products.find((p) => p.id === id);
+    if (!product) return;
+    index += 1;
+    lines.push(
+      index + ') ' + (product.name || 'Товар') +
+      ' — ' + qty + ' шт — ' + ((product.price || 0) * qty) + ' ₽'
+    );
+  });
+  lines.push('Итого: ' + cartTotal() + ' ₽');
+  return lines.join('\n');, // Telegram-username продавца, без «@»
 
   // Админ-режим: запись товаров через GitHub REST API (commit в products.json)
   adminUsername: 'g179p',       // username или числовой id администратора
