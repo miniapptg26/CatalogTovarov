@@ -1,4 +1,3 @@
-'use strict';
 
 /* ===== Настройки ===== */
 const CONFIG = {
