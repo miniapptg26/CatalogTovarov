@@ -2,7 +2,7 @@
 
 /* ===== Настройки ===== */
 const CONFIG = {
-  contactUsername: 'g179p' + '?text=Приветствую' + lines, // Telegram-username продавца, без «@»
+  contactUsername: 'g179p' + '?text=Приветствую', // Telegram-username продавца, без «@»
 
   // Админ-режим: запись товаров через GitHub REST API (commit в products.json)
   adminUsername: 'g179p',       // username или числовой id администратора
