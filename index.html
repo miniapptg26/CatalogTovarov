@@ -14,10 +14,13 @@
         <h1>VapeCatalog</h1>
         <p class="subtitle">Каталог вейп-шопов</p>
       </div>
-      <button id="cartButton" class="cart-button" type="button" aria-label="Открыть корзину">
-        <span aria-hidden="true">🛒</span>
-        <span id="cartCount" class="cart-count">0</span>
-      </button>
+      <div class="header-actions">
+        <button id="adminOpenBtn" class="admin-open-btn hidden" type="button" aria-label="Админ-панель: добавить товар" title="Админ-панель">➕</button>
+        <button id="cartButton" class="cart-button" type="button" aria-label="Открыть корзину">
+          <span aria-hidden="true">🛒</span>
+          <span id="cartCount" class="cart-count">0</span>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -59,6 +62,95 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Админ-панель: видна только администратору (@g179p) -->
+  <div id="adminModal" class="modal" aria-hidden="true">
+    <div class="modal-overlay" data-admin-close=""></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-label="Админ-панель">
+      <div class="modal-head">
+        <h2>Админ-панель</h2>
+        <button id="adminCloseBtn" class="modal-close" type="button" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="modal-body">
+        <section class="admin-section">
+          <h3>🔗 Подключение к GitHub</h3>
+          <label class="field">
+            <span>Token (fine-grained)</span>
+            <input id="ghToken" type="password" placeholder="Fine-grained token…" autocomplete="off">
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Владелец (owner)</span>
+              <input id="ghOwner" type="text" placeholder="username" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Репозиторий</span>
+              <input id="ghRepo" type="text" placeholder="vape-catalog" autocomplete="off">
+            </label>
+          </div>
+          <button id="checkGitHubBtn" class="check-btn" type="button">Проверить связь</button>
+          <div id="githubStatus" class="github-status" role="status"></div>
+        </section>
+
+        <section class="admin-section">
+          <h3>📋 Записи в каталоге</h3>
+          <button id="loadItemsBtn" class="load-btn" type="button">🔄 Загрузить список</button>
+          <div id="itemsStatus" class="github-status" role="status"></div>
+          <div id="itemsList" class="items-list" aria-live="polite"></div>
+        </section>
+
+        <section class="admin-section">
+          <h3>🛒 Новый товар</h3>
+          <label class="field">
+            <span>Название *</span>
+            <input id="adminName" type="text" placeholder="Жидкость «Кола со льдом» 10 мл">
+          </label>
+          <label class="field">
+            <span>Бренд</span>
+            <input id="adminBrand" type="text" placeholder="MistyLab">
+          </label>
+          <label class="field">
+            <span>Категория</span>
+            <input id="adminCategory" type="text" list="categoryList" placeholder="Жидкости">
+            <datalist id="categoryList"></datalist>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Цена, ₽ *</span>
+              <input id="adminPrice" type="number" min="0" step="1" inputmode="numeric" placeholder="590">
+            </label>
+            <label class="field">
+              <span>Старая цена (опц.)</span>
+              <input id="adminOldPrice" type="number" min="0" step="1" inputmode="numeric" placeholder="690">
+            </label>
+          </div>
+          <label class="field">
+            <span>Описание (опц.)</span>
+            <textarea id="adminDescription" rows="2" placeholder="Короткое описание"></textarea>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Бейдж</span>
+              <select id="adminBadge">
+                <option value="">— нет —</option>
+                <option value="хит">хит</option>
+                <option value="-20%">-20%</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Эмодзи (опц.)</span>
+              <input id="adminEmoji" type="text" maxlength="8" placeholder="🫐">
+            </label>
+          </div>
+          <label class="check-field">
+            <input id="adminAvailable" type="checkbox" checked> В наличии
+          </label>
+        </section>
+
+        <button id="saveBtn" class="save-btn" type="button">💾 Сохранить в каталог</button>
+      </div>
+    </div>
+  </div>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="app.js"></script>
