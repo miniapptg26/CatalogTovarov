@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="VapeCatalog — каталог вейп-шопов: жидкости, одноразки, POD-системы и аксессуары. Соберите заказ прямо в Telegram.">
   <title>VapeCatalog — каталог вейп-шопов</title>
+  <script>
+    // Тема применяется до отрисовки, чтобы не было «мигания»
+    (function () {
+      try {
+        if (localStorage.getItem('vape_theme') === 'light') {
+          document.documentElement.classList.add('light');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +25,13 @@
         <p class="subtitle">Каталог вейп-шопов</p>
       </div>
       <div class="header-actions">
-        <button id="adminOpenBtn" class="admin-open-btn hidden" type="button" aria-label="Админ-панель: добавить товар" title="Админ-панель">➕</button>
+        <span id="countLabel" class="count-label">0 записей</span>
+        <button id="refreshBtn" class="header-round-btn" type="button" aria-label="Обновить каталог" title="Обновить каталог">🔄</button>
+        <button id="statsBtn" class="header-round-btn" type="button" aria-label="Статистика" title="Статистика">📊</button>
+        <button id="exportBtn" class="header-round-btn" type="button" aria-label="Экспорт выборки" title="Скопировать прайс текущей выборки">📤</button>
+        <button id="shareBtn" class="header-round-btn" type="button" aria-label="Поделиться каталогом" title="Скопировать ссылку на каталог">🔗</button>
+        <button id="luckyBtn" class="lucky-btn" type="button" aria-label="Мне повезёт" title="Мне повезёт">🎲</button>
+        <button id="themeToggle" class="theme-toggle" type="button" aria-label="Сменить тему" title="Сменить тему">🌙</button>
         <button id="cartButton" class="cart-button" type="button" aria-label="Открыть корзину">
           <span aria-hidden="true">🛒</span>
           <span id="cartCount" class="cart-count">0</span>
@@ -24,29 +40,66 @@
     </div>
   </header>
 
+  <!-- Прелоадер -->
+  <div id="loader" class="loader" aria-hidden="false">
+    <div class="loader-spinner"></div>
+    <p>Загружаем каталог…</p>
+  </div>
+
   <main class="main">
     <section class="search-section" aria-label="Поиск и фильтры">
-      <input
-        id="searchInput"
-        class="search-input"
-        type="search"
-        inputmode="search"
-        placeholder="Поиск по названию или бренду…"
-        aria-label="Поиск по каталогу"
-        autocomplete="off"
-      >
+      <div class="search-row">
+        <div class="search-wrap">
+          <input
+            id="searchInput"
+            class="search-input"
+            type="text"
+            inputmode="search"
+            placeholder="Поиск по названию или бренду…"
+            aria-label="Поиск по каталогу"
+            autocomplete="off"
+          >
+          <button id="searchClear" class="search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить поиск">✕</button>
+        </div>
+        <div class="sort-wrap">
+          <select id="sortSelect" class="sort-select" aria-label="Сортировка">
+            <option value="id">По умолчанию</option>
+            <option value="price_asc">Цена ↑</option>
+            <option value="price_desc">Цена ↓</option>
+            <option value="name">Имя А-Я</option>
+          </select>
+          <button id="resetBtn" class="reset-btn hidden" type="button" title="Сбросить фильтры">↺ Сбросить</button>
+        </div>
+      </div>
       <div id="chips" class="chips" role="group" aria-label="Категории товаров"></div>
+      <div id="chips2" class="chips chips2" role="group" aria-label="Бренды"></div>
+      <div id="activeFilters" class="active-filters" role="group" aria-label="Активные фильтры" hidden></div>
     </section>
 
     <section aria-label="Каталог товаров">
+      <!-- Скелетон первой загрузки: 4 серые карточки-заглушки -->
+      <div id="skeleton" class="skeleton" aria-hidden="true">
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+      </div>
       <div id="catalog" class="catalog"></div>
+      <button id="loadMoreBtn" class="load-more-btn" type="button" hidden>Показать ещё</button>
       <div id="emptyState" class="empty-state" hidden>
         <div class="empty-emoji" aria-hidden="true">🔍</div>
         <p>Ничего не найдено</p>
         <p class="empty-sub">Попробуйте изменить запрос или сбросить фильтры</p>
+        <button id="emptyResetBtn" class="empty-reset-btn" type="button">Сбросить фильтры</button>
       </div>
     </section>
   </main>
+
+  <!-- Панель сравнения -->
+  <div id="compareBar" class="compare-bar" role="region" aria-label="Сравнение товаров">
+    <button id="compareBarBtn" class="compare-bar-main" type="button">⚖️ Сравнить (<span id="compareCount">0</span>)</button>
+    <button id="compareBarClear" class="compare-bar-clear" type="button" aria-label="Очистить сравнение" title="Очистить">✕</button>
+  </div>
 
   <div id="cartBar" class="cart-bar" role="region" aria-label="Ваш заказ">
     <div class="cart-head">
@@ -61,94 +114,44 @@
     <button id="sendOrderButton" class="send-button" type="button">Отправить заказ</button>
   </div>
 
+  <button id="toTop" class="to-top" type="button" aria-label="Наверх" title="Наверх">↑</button>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Админ-панель: видна только администратору (@g179p) -->
-  <div id="adminModal" class="modal" aria-hidden="true">
-    <div class="modal-overlay" data-admin-close=""></div>
-    <div class="modal-panel" role="dialog" aria-modal="true" aria-label="Админ-панель">
-      <div class="modal-head">
-        <h2>Админ-панель</h2>
-        <button id="adminCloseBtn" class="modal-close" type="button" aria-label="Закрыть">✕</button>
+  <!-- Модалка деталей товара -->
+  <div id="detailModal" class="modal" aria-hidden="true">
+    <div class="modal-overlay" data-close-detail=""></div>
+    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-label="Подробнее о товаре">
+      <button id="detailCloseBtn" class="detail-close" type="button" aria-label="Закрыть">✕</button>
+      <div id="detailBody" class="detail-body"></div>
+      <p class="modal-hint">Esc — закрыть</p>
+    </div>
+  </div>
+
+  <!-- Модалка статистики -->
+  <div id="statsModal" class="modal" aria-hidden="true">
+    <div class="modal-overlay" data-close-stats=""></div>
+    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-label="Статистика каталога">
+      <div class="modal-head stats-head">
+        <span class="modal-head-title">📊 Статистика</span>
       </div>
-      <div class="modal-body">
-        <section class="admin-section">
-          <h3>🔗 Подключение к GitHub</h3>
-          <label class="field">
-            <span>Token (fine-grained)</span>
-            <input id="ghToken" type="password" placeholder="Fine-grained token…" autocomplete="off">
-          </label>
-          <div class="field-row">
-            <label class="field">
-              <span>Владелец (owner)</span>
-              <input id="ghOwner" type="text" placeholder="username" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>Репозиторий</span>
-              <input id="ghRepo" type="text" placeholder="vape-catalog" autocomplete="off">
-            </label>
-          </div>
-          <button id="checkGitHubBtn" class="check-btn" type="button">Проверить связь</button>
-          <div id="githubStatus" class="github-status" role="status"></div>
-        </section>
+      <button id="statsCloseBtn" class="detail-close" type="button" aria-label="Закрыть">✕</button>
+      <div id="statsBody" class="stats-body"></div>
+      <p class="modal-hint">Esc — закрыть</p>
+    </div>
+  </div>
 
-        <section class="admin-section">
-          <h3>📋 Записи в каталоге</h3>
-          <button id="loadItemsBtn" class="load-btn" type="button">🔄 Загрузить список</button>
-          <div id="itemsStatus" class="github-status" role="status"></div>
-          <div id="itemsList" class="items-list" aria-live="polite"></div>
-        </section>
-
-        <section class="admin-section">
-          <h3>🛒 Новый товар</h3>
-          <label class="field">
-            <span>Название *</span>
-            <input id="adminName" type="text" placeholder="Жидкость «Кола со льдом» 10 мл">
-          </label>
-          <label class="field">
-            <span>Бренд</span>
-            <input id="adminBrand" type="text" placeholder="MistyLab">
-          </label>
-          <label class="field">
-            <span>Категория</span>
-            <input id="adminCategory" type="text" list="categoryList" placeholder="Жидкости">
-            <datalist id="categoryList"></datalist>
-          </label>
-          <div class="field-row">
-            <label class="field">
-              <span>Цена, ₽ *</span>
-              <input id="adminPrice" type="number" min="0" step="1" inputmode="numeric" placeholder="590">
-            </label>
-            <label class="field">
-              <span>Старая цена (опц.)</span>
-              <input id="adminOldPrice" type="number" min="0" step="1" inputmode="numeric" placeholder="690">
-            </label>
-          </div>
-          <label class="field">
-            <span>Описание (опц.)</span>
-            <textarea id="adminDescription" rows="2" placeholder="Короткое описание"></textarea>
-          </label>
-          <div class="field-row">
-            <label class="field">
-              <span>Бейдж</span>
-              <select id="adminBadge">
-                <option value="">— нет —</option>
-                <option value="хит">хит</option>
-                <option value="-20%">-20%</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Эмодзи (опц.)</span>
-              <input id="adminEmoji" type="text" maxlength="8" placeholder="🫐">
-            </label>
-          </div>
-          <label class="check-field">
-            <input id="adminAvailable" type="checkbox" checked> В наличии
-          </label>
-        </section>
-
-        <button id="saveBtn" class="save-btn" type="button">💾 Сохранить в каталог</button>
+  <!-- Модалка сравнения товаров -->
+  <div id="compareModal" class="modal" aria-hidden="true">
+    <div class="modal-overlay" data-close-compare=""></div>
+    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-label="Сравнение товаров">
+      <div class="modal-head compare-head">
+        <button id="compareClearBtn" class="compare-clear-btn" type="button">✕ Очистить</button>
+        <span class="modal-head-title">⚖️ Сравнение товаров</span>
       </div>
+      <button id="compareCloseBtn" class="detail-close" type="button" aria-label="Закрыть">✕</button>
+      <div id="compareBody" class="compare-body"></div>
+      <p class="modal-hint">Esc — закрыть</p>
     </div>
   </div>
 
