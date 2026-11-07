@@ -7,21 +7,6 @@ const CONFIG = {
   contactUsername: 'g179p' // Telegram-username продавца, без «@»
 };
 
-/* ===== Диапазоны цены (только вейп, взаимоисключающие) ===== */
-const PRICE_RANGES = [
-  { key: 'low', label: 'до 500 ₽', test: (p) => p < 500 },
-  { key: 'mid', label: '500–1500 ₽', test: (p) => p >= 500 && p <= 1500 },
-  { key: 'high', label: 'от 1500 ₽', test: (p) => p > 1500 }
-];
-
-/* ===== Подписи сортировки для панели активных фильтров ===== */
-const SORT_LABELS = {
-  id: 'По умолчанию',
-  price_asc: 'Цена ↑',
-  price_desc: 'Цена ↓',
-  name: 'Имя А-Я'
-};
-
 /* ===== Размер порции «Показать ещё» (только в памяти сессии) ===== */
 const PAGE_SIZE = 24;
 
@@ -92,8 +77,6 @@ function emojiFallback(item, sizeClass) {
   return el;
 }
 
-const COMPARE_MAX = 4; // максимум товаров в сравнении
-
 /* ===== Ключи localStorage (только личные настройки пользователя) ===== */
 const FAVS_KEY = 'vape_favs';        // JSON-массив id избранных товаров
 const THEME_KEY = 'vape_theme';      // 'dark' | 'light'
@@ -105,16 +88,12 @@ const state = {
   search: '',          // текущий запрос
   category: 'Все',     // активная категория
   brand: 'Все бренды', // активный бренд (второй ряд чипов)
-  priceRange: null,    // 'low' | 'mid' | 'high' | null (диапазон цены, только сессия)
   favOnly: false,      // чип «Избранное»
-  compareOnly: false,  // чип «Сравнить»
   inStockOnly: false,  // toggle-чип «В наличии»
-  sort: 'id',          // id | price_asc | price_desc | name
   limit: PAGE_SIZE,    // сколько записей показано («Показать ещё»)
   sig: '',             // подпись фильтров: при смене лимит сбрасывается
   cart: new Map(),     // id товара -> количество
-  favs: new Set(loadFavs()),       // id избранных товаров
-  compare: []         // id для сравнения (только в рамках текущей сессии)
+  favs: new Set(loadFavs())       // id избранных товаров
 };
 
 /* ===== Telegram WebApp ===== */
@@ -127,7 +106,6 @@ const chipsEl = document.getElementById('chips');
 const chips2El = document.getElementById('chips2');
 const searchInput = document.getElementById('searchInput');
 const searchClear = document.getElementById('searchClear');
-const sortSelect = document.getElementById('sortSelect');
 const resetBtn = document.getElementById('resetBtn');
 const countLabel = document.getElementById('countLabel');
 const cartButton = document.getElementById('cartButton');
@@ -157,14 +135,6 @@ const detailBody = document.getElementById('detailBody');
 const statsModal = document.getElementById('statsModal');
 const statsCloseBtn = document.getElementById('statsCloseBtn');
 const statsBody = document.getElementById('statsBody');
-const compareBarEl = document.getElementById('compareBar');
-const compareCountEl = document.getElementById('compareCount');
-const compareBarBtn = document.getElementById('compareBarBtn');
-const compareBarClear = document.getElementById('compareBarClear');
-const compareModal = document.getElementById('compareModal');
-const compareCloseBtn = document.getElementById('compareCloseBtn');
-const compareClearBtn = document.getElementById('compareClearBtn');
-const compareBody = document.getElementById('compareBody');
 
 /* Данные каталога изменяются только через products.json на GitHub */
 
@@ -205,16 +175,6 @@ function restoreScroll() {
   }
 }
 
-/* ===== Подписи фильтров для панели активных фильтров ===== */
-function sortLabel(value) {
-  return SORT_LABELS[value] || value;
-}
-
-function priceRangeLabel(key) {
-  const found = PRICE_RANGES.find((r) => r.key === key);
-  return found ? found.label : '';
-}
-
 /* Возвращает массив активных фильтров: { label, clear } */
 function activeFilterTags() {
   const tags = [];
@@ -229,23 +189,11 @@ function activeFilterTags() {
   if (state.brand !== 'Все бренды') {
     tags.push({ label: 'Бренд: ' + state.brand, clear: () => { state.brand = 'Все бренды'; } });
   }
-  if (state.priceRange) {
-    tags.push({ label: 'Цена: ' + priceRangeLabel(state.priceRange), clear: () => { state.priceRange = null; } });
-  }
   if (state.inStockOnly) {
     tags.push({ label: 'В наличии', clear: () => { state.inStockOnly = false; } });
   }
   if (state.favOnly) {
     tags.push({ label: 'Избранное', clear: () => { state.favOnly = false; } });
-  }
-  if (state.compareOnly) {
-    tags.push({ label: 'Сравнение', clear: () => { state.compareOnly = false; } });
-  }
-  if (state.sort !== 'id') {
-    tags.push({
-      label: 'Сортировка: ' + sortLabel(state.sort),
-      clear: () => { state.sort = 'id'; if (sortSelect) sortSelect.value = 'id'; }
-    });
   }
   return tags;
 }
@@ -305,11 +253,8 @@ function filtersSignature() {
     state.search.trim(),
     state.category,
     state.brand,
-    state.priceRange || '',
     state.favOnly ? '1' : '0',
-    state.compareOnly ? '1' : '0',
-    state.inStockOnly ? '1' : '0',
-    state.sort
+    state.inStockOnly ? '1' : '0'
   ].join('|');
 }
 
@@ -355,7 +300,6 @@ function scrollToCatalog() {
 function closeTopModal() {
   if (detailModal && detailModal.classList.contains('open')) { closeDetail(); return true; }
   if (statsModal && statsModal.classList.contains('open')) { closeStats(); return true; }
-  if (compareModal && compareModal.classList.contains('open')) { closeCompareModal(); return true; }
   return false;
 }
 
@@ -471,50 +415,6 @@ function toggleFav(id) {
   }
 }
 
-/* ===== Сравнение (в рамках текущей сессии, без localStorage) ===== */
-function toggleCompare(id) {
-  state.compare = state.compare.map(Number).filter(Number.isFinite);
-  const idx = state.compare.indexOf(Number(id));
-  if (idx !== -1) {
-    state.compare.splice(idx, 1);
-  } else {
-    if (state.compare.length >= COMPARE_MAX) {
-      haptic('warning');
-      showToast('Максимум 4 товара для сравнения');
-      return;
-    }
-    state.compare.push(Number(id));
-  }
-  haptic('light');
-  renderChips();
-  renderCatalog();
-  syncCompareUI();
-}
-
-function clearCompare() {
-  state.compare = [];
-  renderChips();
-  renderCatalog();
-  syncCompareUI();
-  closeCompareModal();
-}
-
-/* Обновляем плавающую панель и позицию над корзиной */
-function syncCompareUI() {
-  const n = state.compare.length;
-  if (compareCountEl) compareCountEl.textContent = n;
-  if (compareBarEl) compareBarEl.classList.toggle('open', n > 0);
-  positionCompareBar();
-  updateBackButton();
-}
-
-function positionCompareBar() {
-  if (!compareBarEl || !cartBarEl) return;
-  const open = cartBarEl.classList.contains('open');
-  const h = open ? cartBarEl.offsetHeight : 0;
-  compareBarEl.style.bottom = 'calc(env(safe-area-inset-bottom, 0px) + ' + (h + 14) + 'px)';
-}
-
 /* ===== Инициализация Telegram ===== */
 function initTelegram() {
   if (!tg) return;
@@ -546,10 +446,6 @@ function initTelegram() {
       }
       if (statsModal.classList.contains('open')) {
         closeStats();
-        return;
-      }
-      if (compareModal.classList.contains('open')) {
-        closeCompareModal();
         return;
       }
       if (state.cart.size > 0) {
@@ -713,23 +609,6 @@ function renderChips() {
   favChip.appendChild(favBadge);
   chipsEl.appendChild(favChip);
 
-  // Чип «⚖️ Сравнить» (вейп)
-  const compareChip = document.createElement('button');
-  compareChip.type = 'button';
-  compareChip.className = 'chip compare-chip' + (state.compareOnly ? ' active' : '');
-  compareChip.setAttribute('data-compareChip', '');
-  compareChip.setAttribute('aria-pressed', String(state.compareOnly));
-  const compareLabel = document.createElement('span');
-  compareLabel.textContent = '⚖️ Сравнить';
-  compareChip.appendChild(compareLabel);
-  if (state.compare.length > 0) {
-    const badge = document.createElement('span');
-    badge.className = 'chip-badge';
-    badge.textContent = state.compare.length;
-    compareChip.appendChild(badge);
-  }
-  chipsEl.appendChild(compareChip);
-
   const categories = ['Все', ...new Set(
     state.products.map((p) => p.category).filter(Boolean)
   )];
@@ -737,7 +616,7 @@ function renderChips() {
   categories.forEach((category) => {
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'chip' + ((category === state.category && !state.favOnly && !state.compareOnly) ? ' active' : '');
+    chip.className = 'chip' + ((category === state.category && !state.favOnly) ? ' active' : '');
     chip.dataset.category = category;
     const label = document.createElement('span');
     label.textContent = category;
@@ -787,61 +666,22 @@ function renderChips2() {
     chip.textContent = brand;
     chips2El.appendChild(chip);
   });
-
-  // Диапазоны цены (взаимоисключающие, повторный клик снимает)
-  PRICE_RANGES.forEach((range) => {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'chip price-chip' + (state.priceRange === range.key ? ' active' : '');
-    chip.dataset.price = range.key;
-    chip.setAttribute('aria-pressed', String(state.priceRange === range.key));
-    chip.textContent = range.label;
-    chips2El.appendChild(chip);
-  });
 }
 
-/* ===== Фильтры и сортировка ===== */
+/* ===== Фильтры ===== */
+/* Порядок вывода — как в products.json (порядок массива), без сортировки */
 function getFiltered() {
   const query = state.search.trim().toLowerCase();
-  const range = state.priceRange
-    ? PRICE_RANGES.find((r) => r.key === state.priceRange)
-    : null;
 
-  const filtered = state.products.filter((product) => {
+  return state.products.filter((product) => {
     const byCategory = state.category === 'Все' || product.category === state.category;
     const byBrand = state.brand === 'Все бренды' || product.brand === state.brand;
     const byFav = !state.favOnly || state.favs.has(product.id);
-    const byCompare = !state.compareOnly || state.compare.includes(Number(product.id));
     const byStock = !state.inStockOnly || product.available !== false;
-    const byPrice = !range || range.test(Number(product.price) || 0);
     const haystack = String(product.name + ' ' + (product.brand || '')).toLowerCase();
     const bySearch = !query || haystack.includes(query);
-    return byCategory && byBrand && byFav && byCompare && byStock && byPrice && bySearch;
+    return byCategory && byBrand && byFav && byStock && bySearch;
   });
-
-  // Активный чип «Сравнить»: порядок = порядок добавления в сравнение
-  if (state.compareOnly) {
-    const byId = new Map(filtered.map((p) => [Number(p.id), p]));
-    return state.compare.map((id) => byId.get(id)).filter(Boolean);
-  }
-
-  const sort = state.sort;
-  filtered.sort((a, b) => {
-    let cmp = 0;
-    if (sort === 'name') {
-      cmp = String(a.name || '').localeCompare(String(b.name || ''), 'ru');
-    } else if (sort === 'price_asc') {
-      cmp = effectivePrice(a) - effectivePrice(b);
-    } else if (sort === 'price_desc') {
-      cmp = effectivePrice(b) - effectivePrice(a);
-    } else {
-      cmp = Number(a.id) - Number(b.id); // «По умолчанию»
-    }
-    if (cmp !== 0) return cmp;
-    return Number(a.id) - Number(b.id);
-  });
-
-  return filtered;
 }
 
 /* Актуальная цена со скидкой: учитывается oldPrice (берём минимальную из price/oldPrice) */
@@ -856,11 +696,8 @@ function hasActiveFilters() {
   return Boolean(state.search.trim()) ||
     state.category !== 'Все' ||
     state.favOnly ||
-    state.compareOnly ||
     state.inStockOnly ||
-    state.sort !== 'id' ||
-    state.brand !== 'Все бренды' ||
-    Boolean(state.priceRange);
+    state.brand !== 'Все бренды';
 }
 
 function updateResetBtn() {
@@ -873,12 +710,8 @@ function resetFilters() {
   if (searchInput) searchInput.value = '';
   state.category = 'Все';
   state.brand = 'Все бренды';
-  state.priceRange = null;
   state.favOnly = false;
-  state.compareOnly = false;
   state.inStockOnly = false;
-  state.sort = 'id';
-  if (sortSelect) sortSelect.value = 'id';
   updateSearchClear();
   updateResetBtn();
   renderChips();
@@ -1058,7 +891,7 @@ function createCard(product) {
     priceRow.appendChild(oldPrice);
   }
 
-  // Обёртка «имя + бренд + цена» — в режиме строк идёт в центре строки
+  // Обёртка «имя + бренд + цена» — центр карточки (сетка)
   const infoWrap = document.createElement('div');
   infoWrap.className = 'card-row-info';
   infoWrap.append(name, brand, priceRow);
@@ -1124,18 +957,6 @@ function createControls(product) {
 
     controls.appendChild(wrap);
   }
-
-  // Кнопка «⚖️» сравнения — 32px круг, внизу-справа, не конфликтует со степпером
-  const isCmp = state.compare.map(Number).includes(Number(product.id));
-  const cmpBtn = document.createElement('button');
-  cmpBtn.type = 'button';
-  cmpBtn.className = 'compare-card-btn' + (isCmp ? ' active' : '');
-  cmpBtn.dataset.compare = product.id;
-  cmpBtn.setAttribute('aria-label', isCmp ? 'Убрать из сравнения' : 'Добавить в сравнение');
-  cmpBtn.setAttribute('aria-pressed', String(isCmp));
-  cmpBtn.textContent = '⚖️';
-  controls.appendChild(cmpBtn);
-
   return controls;
 }
 
@@ -1162,8 +983,7 @@ function cartTotal() {
 function updateBackButton() {
   if (!tg || !tg.BackButton) return;
   const anyOpen = detailModal.classList.contains('open') ||
-    statsModal.classList.contains('open') ||
-    compareModal.classList.contains('open');
+    statsModal.classList.contains('open');
   if (anyOpen || state.cart.size > 0) {
     tg.BackButton.show();
   } else {
@@ -1201,7 +1021,6 @@ function renderCartBar() {
   document.body.classList.toggle('has-cart', hasItems);
 
   updateBackButton();
-  positionCompareBar();
 }
 
 function addToCart(id) {
@@ -1443,13 +1262,6 @@ function renderDetail(item) {
   addBtn.disabled = item.available === false;
   actions.appendChild(addBtn);
 
-  const inCompare = state.compare.map(Number).includes(Number(item.id));
-  const compareBtn = document.createElement('button');
-  compareBtn.type = 'button';
-  compareBtn.className = 'detail-compare-btn' + (inCompare ? ' active' : '');
-  compareBtn.textContent = inCompare ? '⚖️ В сравнении' : '⚖️ Сравнить';
-  actions.appendChild(compareBtn);
-
   const shareBtn = document.createElement('button');
   shareBtn.type = 'button';
   shareBtn.className = 'detail-share-btn';
@@ -1567,171 +1379,6 @@ function exportSelection() {
   });
 }
 
-/* ===== Сравнение: модалка ===== */
-function openCompareModal() {
-  if (state.compare.length === 0) {
-    showToast('Список сравнения пуст');
-    return;
-  }
-  renderCompareTable();
-  rememberScroll();
-  compareModal.classList.add('open');
-  compareModal.setAttribute('aria-hidden', 'false');
-  updateBackButton();
-}
-
-function closeCompareModal() {
-  compareModal.classList.remove('open');
-  compareModal.setAttribute('aria-hidden', 'true');
-  updateBackButton();
-  restoreScroll();
-}
-
-function compareDiscount(p) {
-  const price = Number(p.price) || 0;
-  const old = Number(p.oldPrice) || 0;
-  if (old > 0 && old > price) {
-    return Math.round((1 - price / old) * 100);
-  }
-  return null;
-}
-
-function renderCompareTable() {
-  compareBody.replaceChildren();
-
-  const items = state.compare
-    .map(Number)
-    .map((id) => state.products.find((p) => Number(p.id) === Number(id)))
-    .filter(Boolean);
-
-  if (items.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'compare-empty';
-    empty.textContent = 'Добавьте товары для сравнения (кнопка ⚖️ на карточке или в карточке товара)';
-    compareBody.appendChild(empty);
-    return;
-  }
-
-  const availableItems = items.filter((it) => it.available !== false);
-  const bestPrice = availableItems.length > 0
-    ? Math.min.apply(null, availableItems.map((it) => effectivePrice(it)))
-    : null;
-
-  const grid = document.createElement('div');
-  grid.className = 'compare-grid';
-  grid.style.setProperty('--cols', String(items.length));
-
-  // Шапка: пустая ячейка + колонки товаров
-  const headLabel = document.createElement('div');
-  headLabel.className = 'compare-cell compare-label';
-  headLabel.textContent = 'Товары';
-  grid.appendChild(headLabel);
-
-  items.forEach((it) => {
-    const cell = document.createElement('div');
-    cell.className = 'compare-cell compare-head';
-
-    const e = document.createElement('div');
-    e.className = 'compare-head-emoji';
-    e.textContent = it.emoji || CATEGORY_EMOJI[it.category] || DEFAULT_EMOJI;
-
-    const n = document.createElement('div');
-    n.className = 'compare-head-name';
-    n.textContent = it.name || 'Без названия';
-
-    const b = document.createElement('div');
-    b.className = 'compare-head-brand';
-    b.textContent = it.brand || '\u00A0';
-
-    cell.append(e, n, b);
-    grid.appendChild(cell);
-  });
-
-  // Цена
-  const priceLabel = document.createElement('div');
-  priceLabel.className = 'compare-cell compare-label';
-  priceLabel.textContent = 'Цена';
-  grid.appendChild(priceLabel);
-
-  items.forEach((it) => {
-    const cell = document.createElement('div');
-    cell.className = 'compare-cell';
-    if (it.available === false) {
-      const na = document.createElement('span');
-      na.className = 'compare-price na';
-      na.textContent = '—';
-      cell.appendChild(na);
-    } else {
-      const cur = effectivePrice(it);
-      const price = document.createElement('span');
-      price.className = 'compare-price' + (bestPrice !== null && cur === bestPrice ? ' best' : '');
-      price.textContent = formatPrice(cur);
-      cell.appendChild(price);
-      const old = Number(it.oldPrice) || 0;
-      if (old > 0 && old > cur) {
-        const oldEl = document.createElement('span');
-        oldEl.className = 'compare-old';
-        oldEl.textContent = formatPrice(old);
-        cell.appendChild(oldEl);
-      }
-    }
-    grid.appendChild(cell);
-  });
-
-  // Скидка
-  const discLabel = document.createElement('div');
-  discLabel.className = 'compare-cell compare-label';
-  discLabel.textContent = 'Скидка';
-  grid.appendChild(discLabel);
-
-  items.forEach((it) => {
-    const cell = document.createElement('div');
-    cell.className = 'compare-cell';
-    const d = compareDiscount(it);
-    const span = document.createElement('span');
-    if (d !== null) {
-      span.className = 'compare-discount';
-      span.textContent = d + '%';
-    } else {
-      span.className = 'compare-muted';
-      span.textContent = '—';
-    }
-    cell.appendChild(span);
-    grid.appendChild(cell);
-  });
-
-  // Наличие
-  const avLabel = document.createElement('div');
-  avLabel.className = 'compare-cell compare-label';
-  avLabel.textContent = 'Наличие';
-  grid.appendChild(avLabel);
-
-  items.forEach((it) => {
-    const cell = document.createElement('div');
-    cell.className = 'compare-cell';
-    const span = document.createElement('span');
-    span.className = it.available === false ? 'compare-avail-no' : 'compare-avail-yes';
-    span.textContent = it.available === false ? 'Нет' : 'Есть';
-    cell.appendChild(span);
-    grid.appendChild(cell);
-  });
-
-  // Категория
-  const catLabel = document.createElement('div');
-  catLabel.className = 'compare-cell compare-label';
-  catLabel.textContent = 'Категория';
-  grid.appendChild(catLabel);
-
-  items.forEach((it) => {
-    const cell = document.createElement('div');
-    cell.className = 'compare-cell';
-    cell.textContent = it.category || '—';
-    grid.appendChild(cell);
-  });
-
-  compareBody.appendChild(grid);
-}
-
 /* ===== «Мне повезёт» ===== */
 function spinLucky(items) {
   const icons = ['🎲', '🎰', '⭐', '🎯', '🍀'];
@@ -1770,24 +1417,12 @@ chipsEl.addEventListener('click', (event) => {
     state.favOnly = !state.favOnly;
     if (state.favOnly) {
       state.category = 'Все';
-      state.compareOnly = false;
-    }
-  } else if (chip.hasAttribute('data-compareChip')) {
-    if (state.compare.length === 0) {
-      showToast('Список сравнения пуст');
-      return;
-    }
-    state.compareOnly = !state.compareOnly;
-    if (state.compareOnly) {
-      state.favOnly = false;
-      state.category = 'Все';
     }
   } else if (chip.hasAttribute('data-toggle')) {
     state.inStockOnly = !state.inStockOnly;
   } else if (chip.dataset.category !== undefined) {
     state.category = chip.dataset.category;
     state.favOnly = false;
-    state.compareOnly = false;
     isCategoryChip = true;
   }
   haptic('light');
@@ -1799,13 +1434,6 @@ chipsEl.addEventListener('click', (event) => {
 chips2El.addEventListener('click', (event) => {
   const chip = event.target.closest('.chip');
   if (!chip) return;
-  if (chip.dataset.price !== undefined) {
-    state.priceRange = (state.priceRange === chip.dataset.price) ? null : chip.dataset.price;
-    haptic('light');
-    renderChips2();
-    renderCatalog();
-    return;
-  }
   if (chip.dataset.brand === undefined) return;
   state.brand = chip.dataset.brand;
   haptic('light');
@@ -1828,24 +1456,12 @@ searchClear.addEventListener('click', () => {
   searchInput.focus();
 });
 
-sortSelect.addEventListener('change', (event) => {
-  state.sort = event.target.value;
-  haptic('light');
-  renderCatalog();
-});
-
 resetBtn.addEventListener('click', resetFilters);
 
 catalogEl.addEventListener('click', (event) => {
   const favBtn = event.target.closest('.fav-btn');
   if (favBtn) {
     toggleFav(Number(favBtn.dataset.id));
-    return;
-  }
-
-  const cmpBtn = event.target.closest('.compare-card-btn');
-  if (cmpBtn) {
-    toggleCompare(Number(cmpBtn.dataset.compare));
     return;
   }
 
@@ -1873,25 +1489,6 @@ detailBody.addEventListener('click', (event) => {
     }
     return;
   }
-  const compareBtn = event.target.closest('.detail-compare-btn');
-  if (compareBtn) {
-    if (detailItem) {
-      const wasIn = state.compare.map(Number).includes(Number(detailItem.id));
-      const lenBefore = state.compare.length;
-      toggleCompare(detailItem.id);
-      const nowIn = state.compare.map(Number).includes(Number(detailItem.id));
-      if (wasIn) {
-        showToast('Убрано из сравнения');
-        renderDetail(detailItem);
-      } else if (nowIn && state.compare.length === lenBefore + 1) {
-        showToast('Добавлено в сравнение');
-        renderDetail(detailItem);
-      } else if (!nowIn) {
-        // максимум 4 — toast уже показан внутри toggleCompare
-      }
-    }
-    return;
-  }
   const catBtn = event.target.closest('.detail-category-btn');
   if (catBtn) {
     if (detailItem && detailItem.category) {
@@ -1900,7 +1497,6 @@ detailBody.addEventListener('click', (event) => {
       state.search = '';
       searchInput.value = '';
       state.favOnly = false;
-      state.compareOnly = false;
       state.category = cat;
       updateSearchClear();
       renderChips();
@@ -1927,20 +1523,6 @@ statsModal.addEventListener('click', (event) => {
 });
 
 exportBtn.addEventListener('click', exportSelection);
-
-compareBarBtn.addEventListener('click', openCompareModal);
-compareBarClear.addEventListener('click', () => {
-  clearCompare();
-  showToast('Сравнение очищено');
-});
-compareCloseBtn.addEventListener('click', closeCompareModal);
-compareClearBtn.addEventListener('click', () => {
-  clearCompare();
-  showToast('Сравнение очищено');
-});
-compareModal.addEventListener('click', (event) => {
-  if (event.target && event.target.hasAttribute('data-close-compare')) closeCompareModal();
-});
 
 luckyBtn.addEventListener('click', () => {
   const items = getFiltered();

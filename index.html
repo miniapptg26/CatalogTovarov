@@ -61,13 +61,7 @@
           >
           <button id="searchClear" class="search-clear hidden" type="button" aria-label="Очистить поиск" title="Очистить поиск">✕</button>
         </div>
-        <div class="sort-wrap">
-          <select id="sortSelect" class="sort-select" aria-label="Сортировка">
-            <option value="id">По умолчанию</option>
-            <option value="price_asc">Цена ↑</option>
-            <option value="price_desc">Цена ↓</option>
-            <option value="name">Имя А-Я</option>
-          </select>
+        <div class="reset-wrap">
           <button id="resetBtn" class="reset-btn hidden" type="button" title="Сбросить фильтры">↺ Сбросить</button>
         </div>
       </div>
@@ -94,12 +88,6 @@
       </div>
     </section>
   </main>
-
-  <!-- Панель сравнения -->
-  <div id="compareBar" class="compare-bar" role="region" aria-label="Сравнение товаров">
-    <button id="compareBarBtn" class="compare-bar-main" type="button">⚖️ Сравнить (<span id="compareCount">0</span>)</button>
-    <button id="compareBarClear" class="compare-bar-clear" type="button" aria-label="Очистить сравнение" title="Очистить">✕</button>
-  </div>
 
   <div id="cartBar" class="cart-bar" role="region" aria-label="Ваш заказ">
     <div class="cart-head">
@@ -137,20 +125,6 @@
       </div>
       <button id="statsCloseBtn" class="detail-close" type="button" aria-label="Закрыть">✕</button>
       <div id="statsBody" class="stats-body"></div>
-      <p class="modal-hint">Esc — закрыть</p>
-    </div>
-  </div>
-
-  <!-- Модалка сравнения товаров -->
-  <div id="compareModal" class="modal" aria-hidden="true">
-    <div class="modal-overlay" data-close-compare=""></div>
-    <div class="modal-panel detail-panel" role="dialog" aria-modal="true" aria-label="Сравнение товаров">
-      <div class="modal-head compare-head">
-        <button id="compareClearBtn" class="compare-clear-btn" type="button">✕ Очистить</button>
-        <span class="modal-head-title">⚖️ Сравнение товаров</span>
-      </div>
-      <button id="compareCloseBtn" class="detail-close" type="button" aria-label="Закрыть">✕</button>
-      <div id="compareBody" class="compare-body"></div>
       <p class="modal-hint">Esc — закрыть</p>
     </div>
   </div>
