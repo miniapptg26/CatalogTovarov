@@ -1,15 +1,29 @@
 'use strict';
 
+/* Данные каталога изменяются только через products.json на GitHub */
+
 /* ===== Настройки ===== */
 const CONFIG = {
-  contactUsername: 'g179p' + '?text=Приветствую', // Telegram-username продавца, без «@»
-
-  // Админ-режим: запись товаров через GitHub REST API (commit в products.json)
-  adminUsername: 'g179p',       // username или числовой id администратора
-  repoOwner: '',                // владелец GitHub-репозитория (вводится в админ-панели)
-  repoName: 'vape-catalog',     // репозиторий, куда пишутся товары
-  jsonPath: 'products.json'     // файл каталога внутри репозитория
+  contactUsername: 'g179p' // Telegram-username продавца, без «@»
 };
+
+/* ===== Диапазоны цены (только вейп, взаимоисключающие) ===== */
+const PRICE_RANGES = [
+  { key: 'low', label: 'до 500 ₽', test: (p) => p < 500 },
+  { key: 'mid', label: '500–1500 ₽', test: (p) => p >= 500 && p <= 1500 },
+  { key: 'high', label: 'от 1500 ₽', test: (p) => p > 1500 }
+];
+
+/* ===== Подписи сортировки для панели активных фильтров ===== */
+const SORT_LABELS = {
+  id: 'По умолчанию',
+  price_asc: 'Цена ↑',
+  price_desc: 'Цена ↓',
+  name: 'Имя А-Я'
+};
+
+/* ===== Размер порции «Показать ещё» (только в памяти сессии) ===== */
+const PAGE_SIZE = 24;
 
 /* Эмодзи-заглушки по категориям (используются, если у товара нет image и emoji) */
 const CATEGORY_EMOJI = {
@@ -21,28 +35,101 @@ const CATEGORY_EMOJI = {
 
 const DEFAULT_EMOJI = '📦';
 
+/* ===== Медиа: изображение или эмодзи-заглушка ===== */
+function buildEmojiEl(item, sizeClass) {
+  const span = document.createElement('span');
+  span.className = 'media-emoji' + (sizeClass ? ' ' + sizeClass : '');
+  span.textContent = item.emoji || CATEGORY_EMOJI[item.category] || DEFAULT_EMOJI;
+  return span;
+}
+
+/*
+ * buildMediaEl(item, sizeClass):
+ * - image — непустая строка: создаём <img> с lazy-загрузкой, без referrer,
+ *   width/height = 80 (карточка) или 120 (модалка), alt = item.name.
+ *   До загрузки — класс .img-loading (opacity 0), после 'load' — .img-loaded
+ *   (opacity 1, переход 0.2s). При ошибке заменяет себя эмодзи-заглушкой
+ *   с dataset.fallback='1' (повторно не грузим).
+ * - 'http://' (не https) — сразу эмодзи-фолбэк, небезопасный контент не грузим.
+ * - иначе — span.media-emoji.
+ */
+function buildMediaEl(item, sizeClass) {
+  const rawImage = typeof item.image === 'string' ? item.image.trim() : '';
+  const isModal = sizeClass && String(sizeClass).indexOf('modal') !== -1;
+  const dim = isModal ? 120 : 80;
+
+  // Небезопасный http:// — не грузим, сразу эмодзи-фолбэк
+  if (rawImage.indexOf('http://') === 0) {
+    return emojiFallback(item, sizeClass);
+  }
+
+  if (rawImage !== '') {
+    const img = document.createElement('img');
+    img.className = (sizeClass || '') + ' img-loading';
+    img.src = rawImage;
+    img.alt = item.name != null ? String(item.name) : '';
+    img.width = dim;
+    img.height = dim;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('load', function () {
+      this.classList.remove('img-loading');
+      this.classList.add('img-loaded');
+    }, false);
+    img.addEventListener('error', function () {
+      img.replaceWith(emojiFallback(item, sizeClass));
+    }, false);
+    return img;
+  }
+  return buildEmojiEl(item, sizeClass);
+}
+
+/* Эмодзи-фолбэк с пометкой, что картинка не загружалась */
+function emojiFallback(item, sizeClass) {
+  const el = buildEmojiEl(item, sizeClass);
+  el.dataset.fallback = '1';
+  return el;
+}
+
+const COMPARE_MAX = 4; // максимум товаров в сравнении
+
+/* ===== Ключи localStorage (только личные настройки пользователя) ===== */
+const FAVS_KEY = 'vape_favs';        // JSON-массив id избранных товаров
+const THEME_KEY = 'vape_theme';      // 'dark' | 'light'
+
 /* ===== Состояние ===== */
+/* Всё, кроме favs и theme, живёт только в памяти текущей сессии */
 const state = {
-  products: [],      // все товары из products.json
-  search: '',        // текущий запрос
-  category: 'Все',   // активная категория
-  cart: new Map()    // id товара -> количество
+  products: [],        // все товары из products.json
+  search: '',          // текущий запрос
+  category: 'Все',     // активная категория
+  brand: 'Все бренды', // активный бренд (второй ряд чипов)
+  priceRange: null,    // 'low' | 'mid' | 'high' | null (диапазон цены, только сессия)
+  favOnly: false,      // чип «Избранное»
+  compareOnly: false,  // чип «Сравнить»
+  inStockOnly: false,  // toggle-чип «В наличии»
+  sort: 'id',          // id | price_asc | price_desc | name
+  limit: PAGE_SIZE,    // сколько записей показано («Показать ещё»)
+  sig: '',             // подпись фильтров: при смене лимит сбрасывается
+  cart: new Map(),     // id товара -> количество
+  favs: new Set(loadFavs()),       // id избранных товаров
+  compare: []         // id для сравнения (только в рамках текущей сессии)
 };
 
 /* ===== Telegram WebApp ===== */
 const tg = window.Telegram ? window.Telegram.WebApp : null;
 
-/* ===== Определение администратора ===== */
-const tgUser = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe)
-  ? window.Telegram.WebApp.initDataUnsafe.user
-  : null;
-const isAdmin = !!(tgUser && (tgUser.username === CONFIG.adminUsername || String(tgUser.id) === CONFIG.adminUsername));
-
 /* ===== DOM ===== */
 const catalogEl = document.getElementById('catalog');
 const emptyStateEl = document.getElementById('emptyState');
 const chipsEl = document.getElementById('chips');
+const chips2El = document.getElementById('chips2');
 const searchInput = document.getElementById('searchInput');
+const searchClear = document.getElementById('searchClear');
+const sortSelect = document.getElementById('sortSelect');
+const resetBtn = document.getElementById('resetBtn');
+const countLabel = document.getElementById('countLabel');
 const cartButton = document.getElementById('cartButton');
 const cartCountEl = document.getElementById('cartCount');
 const cartBarEl = document.getElementById('cartBar');
@@ -51,6 +138,382 @@ const cartTotalEl = document.getElementById('cartTotal');
 const sendOrderButton = document.getElementById('sendOrderButton');
 const clearCartButton = document.getElementById('clearCartButton');
 const toastEl = document.getElementById('toast');
+const luckyBtn = document.getElementById('luckyBtn');
+const themeToggle = document.getElementById('themeToggle');
+const statsBtn = document.getElementById('statsBtn');
+const exportBtn = document.getElementById('exportBtn');
+
+const toTopBtn = document.getElementById('toTop');
+const loaderEl = document.getElementById('loader');
+const skeletonEl = document.getElementById('skeleton');
+const refreshBtn = document.getElementById('refreshBtn');
+const shareBtn = document.getElementById('shareBtn');
+const activeFiltersEl = document.getElementById('activeFilters');
+const loadMoreBtn = document.getElementById('loadMoreBtn');
+const emptyResetBtn = document.getElementById('emptyResetBtn');
+const detailModal = document.getElementById('detailModal');
+const detailCloseBtn = document.getElementById('detailCloseBtn');
+const detailBody = document.getElementById('detailBody');
+const statsModal = document.getElementById('statsModal');
+const statsCloseBtn = document.getElementById('statsCloseBtn');
+const statsBody = document.getElementById('statsBody');
+const compareBarEl = document.getElementById('compareBar');
+const compareCountEl = document.getElementById('compareCount');
+const compareBarBtn = document.getElementById('compareBarBtn');
+const compareBarClear = document.getElementById('compareBarClear');
+const compareModal = document.getElementById('compareModal');
+const compareCloseBtn = document.getElementById('compareCloseBtn');
+const compareClearBtn = document.getElementById('compareClearBtn');
+const compareBody = document.getElementById('compareBody');
+
+/* Данные каталога изменяются только через products.json на GitHub */
+
+let detailItem = null; // текущий товар в модалке деталей
+
+/* ===== Вибро-отклик (Telegram Haptics; безопасно в браузере) ===== */
+function haptic(type) {
+  try {
+    const wa = window.Telegram && window.Telegram.WebApp;
+    const hf = wa && wa.HapticFeedback;
+    if (!hf) return;
+
+    if (type === 'success' || type === 'warning' || type === 'error') {
+      if (typeof hf.notificationOccurred === 'function') {
+        hf.notificationOccurred(type);
+      }
+      return;
+    }
+
+    if (typeof hf.selectionChanged === 'function') hf.selectionChanged();
+    if (typeof hf.impactOccurred === 'function') hf.impactOccurred('light');
+  } catch (e) {}
+}
+
+/* ===== Сохранение позиции скролла при открытии/закрытии модалок ===== */
+let savedScrollY = 0;
+
+function rememberScroll() {
+  try { savedScrollY = window.scrollY || 0; } catch (e) { savedScrollY = 0; }
+}
+
+function restoreScroll() {
+  if (!savedScrollY) return;
+  try {
+    window.scrollTo({ top: savedScrollY, behavior: 'auto' });
+  } catch (e) {
+    try { window.scrollTo(0, savedScrollY); } catch (e2) {}
+  }
+}
+
+/* ===== Подписи фильтров для панели активных фильтров ===== */
+function sortLabel(value) {
+  return SORT_LABELS[value] || value;
+}
+
+function priceRangeLabel(key) {
+  const found = PRICE_RANGES.find((r) => r.key === key);
+  return found ? found.label : '';
+}
+
+/* Возвращает массив активных фильтров: { label, clear } */
+function activeFilterTags() {
+  const tags = [];
+  const q = state.search.trim();
+
+  if (q) {
+    tags.push({ label: 'Поиск: ' + q, clear: () => { clearSearch(); } });
+  }
+  if (state.category !== 'Все') {
+    tags.push({ label: 'Категория: ' + state.category, clear: () => { state.category = 'Все'; } });
+  }
+  if (state.brand !== 'Все бренды') {
+    tags.push({ label: 'Бренд: ' + state.brand, clear: () => { state.brand = 'Все бренды'; } });
+  }
+  if (state.priceRange) {
+    tags.push({ label: 'Цена: ' + priceRangeLabel(state.priceRange), clear: () => { state.priceRange = null; } });
+  }
+  if (state.inStockOnly) {
+    tags.push({ label: 'В наличии', clear: () => { state.inStockOnly = false; } });
+  }
+  if (state.favOnly) {
+    tags.push({ label: 'Избранное', clear: () => { state.favOnly = false; } });
+  }
+  if (state.compareOnly) {
+    tags.push({ label: 'Сравнение', clear: () => { state.compareOnly = false; } });
+  }
+  if (state.sort !== 'id') {
+    tags.push({
+      label: 'Сортировка: ' + sortLabel(state.sort),
+      clear: () => { state.sort = 'id'; if (sortSelect) sortSelect.value = 'id'; }
+    });
+  }
+  return tags;
+}
+
+/* ===== Панель активных фильтров ===== */
+function renderActiveFilters() {
+  if (!activeFiltersEl) return;
+
+  activeFiltersEl.replaceChildren();
+  const tags = activeFilterTags();
+
+  if (tags.length === 0) {
+    activeFiltersEl.hidden = true;
+    return;
+  }
+  activeFiltersEl.hidden = false;
+
+  tags.forEach((tag) => {
+    const chip = document.createElement('span');
+    chip.className = 'af-chip';
+
+    const label = document.createElement('span');
+    label.className = 'af-label';
+    label.textContent = tag.label;
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'af-x';
+    x.textContent = '✕';
+    x.setAttribute('aria-label', 'Снять фильтр: ' + tag.label);
+    x.addEventListener('click', () => {
+      haptic('light');
+      tag.clear();
+      renderChips();
+      renderChips2();
+      renderCatalog();
+    });
+
+    chip.append(label, x);
+    activeFiltersEl.appendChild(chip);
+  });
+
+  const resetAll = document.createElement('button');
+  resetAll.type = 'button';
+  resetAll.className = 'af-reset';
+  resetAll.textContent = 'Сбросить всё';
+  resetAll.addEventListener('click', () => {
+    haptic('light');
+    resetFilters();
+  });
+  activeFiltersEl.appendChild(resetAll);
+}
+
+/* ===== Пагинация «Показать ещё» ===== */
+function filtersSignature() {
+  return [
+    state.search.trim(),
+    state.category,
+    state.brand,
+    state.priceRange || '',
+    state.favOnly ? '1' : '0',
+    state.compareOnly ? '1' : '0',
+    state.inStockOnly ? '1' : '0',
+    state.sort
+  ].join('|');
+}
+
+function renderLoadMore(shown, total) {
+  if (!loadMoreBtn) return;
+  const rest = total - shown;
+  if (rest > 0) {
+    loadMoreBtn.hidden = false;
+    loadMoreBtn.textContent = 'Показать ещё (осталось ' + rest + ')';
+  } else {
+    loadMoreBtn.hidden = true;
+  }
+}
+
+/* ===== Скелетон первой загрузки ===== */
+function hideSkeleton() {
+  if (skeletonEl) skeletonEl.hidden = true;
+}
+
+/* ===== Прокрутка к каталогу (с учётом липкой шапки) ===== */
+function scrollToCatalog() {
+  try {
+    if (!catalogEl || typeof catalogEl.getBoundingClientRect !== 'function') return;
+
+    const header = (typeof document.querySelector === 'function') ? document.querySelector('.header') : null;
+    const headerH = (header && typeof header.getBoundingClientRect === 'function')
+      ? header.getBoundingClientRect().height : 0;
+    const current = window.scrollY || 0;
+    const target = catalogEl.getBoundingClientRect().top + current - headerH - 10;
+
+    if (current < target) {
+      catalogEl.style.scrollMarginTop = (headerH + 10) + 'px';
+      if (typeof catalogEl.scrollIntoView === 'function') {
+        catalogEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        window.scrollTo({ top: target, behavior: 'smooth' });
+      }
+    }
+  } catch (e) {}
+}
+
+/* ===== Горячие клавиши (десктоп) ===== */
+function closeTopModal() {
+  if (detailModal && detailModal.classList.contains('open')) { closeDetail(); return true; }
+  if (statsModal && statsModal.classList.contains('open')) { closeStats(); return true; }
+  if (compareModal && compareModal.classList.contains('open')) { closeCompareModal(); return true; }
+  return false;
+}
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable === true;
+}
+
+function handleHotkey(event) {
+  if (!event) return;
+  const key = event.key;
+  if (!key) return;
+
+  const typing = isTypingTarget(event.target);
+
+  if ((key === '/' && !typing) || ((key === 'k' || key === 'K') && (event.ctrlKey || event.metaKey))) {
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (searchInput && typeof searchInput.focus === 'function') searchInput.focus();
+    return;
+  }
+
+  if (key === 'Escape') {
+    if (closeTopModal()) {
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      return;
+    }
+    if (searchInput && searchInput.value !== '') {
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      clearSearch();
+    }
+    return;
+  }
+
+  if (typing) return;
+
+  if (key === 't' || key === 'T') { haptic('light'); toggleTheme(); return; }
+}
+
+/* ===== Поделиться ссылкой на каталог ===== */
+async function shareCatalog() {
+  const ok = await copyText(location.href);
+  showToast(ok ? 'Ссылка скопирована' : 'Не удалось скопировать ссылку');
+}
+
+/* ===== Обновление каталога (🔄) ===== */
+async function refreshCatalog() {
+  if (!refreshBtn || refreshBtn.disabled) return;
+  refreshBtn.disabled = true;
+  refreshBtn.classList.add('spinning');
+  showLoader(true);
+
+  try {
+    const response = await fetch('products.json');
+    if (!response.ok) {
+      throw new Error('Ошибка HTTP ' + response.status);
+    }
+    const parsed = parseJsonFile(await response.text(), 'products.json');
+    if (!parsed.ok) {
+      showToast('Не удалось обновить: ошибка в файле products.json');
+      return;
+    }
+    state.products = parsed.data;
+    renderChips();
+    renderChips2();
+    renderCatalog();
+    showToast('Каталог обновлён: ' + state.products.length + ' ' +
+      plural(state.products.length, 'запись', 'записи', 'записей'));
+  } catch (err) {
+    showToast('Не удалось обновить: ' + (err && err.message ? err.message : 'неизвестная ошибка'));
+  } finally {
+    showLoader(false);
+    refreshBtn.disabled = false;
+    refreshBtn.classList.remove('spinning');
+  }
+}
+
+/* ===== Избранное ===== */
+function loadFavs() {
+  try {
+    const raw = localStorage.getItem(FAVS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.map(Number).filter(Number.isFinite) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveFavs() {
+  try {
+    localStorage.setItem(FAVS_KEY, JSON.stringify([...state.favs]));
+  } catch (e) {}
+}
+
+function toggleFav(id) {
+  const wasFav = state.favs.has(id);
+  if (wasFav) state.favs.delete(id);
+  else state.favs.add(id);
+  saveFavs();
+  haptic('light');
+  renderChips();
+  renderCatalog();
+  // Анимация «сердечко наполнилось» (0.3s)
+  if (!wasFav) {
+    const card = catalogEl.querySelector('.card[data-id="' + id + '"]');
+    if (card) {
+      const btn = card.querySelector('.fav-btn');
+      if (btn) {
+        btn.classList.add('pop');
+        setTimeout(function () { btn.classList.remove('pop'); }, 320);
+      }
+    }
+  }
+}
+
+/* ===== Сравнение (в рамках текущей сессии, без localStorage) ===== */
+function toggleCompare(id) {
+  state.compare = state.compare.map(Number).filter(Number.isFinite);
+  const idx = state.compare.indexOf(Number(id));
+  if (idx !== -1) {
+    state.compare.splice(idx, 1);
+  } else {
+    if (state.compare.length >= COMPARE_MAX) {
+      haptic('warning');
+      showToast('Максимум 4 товара для сравнения');
+      return;
+    }
+    state.compare.push(Number(id));
+  }
+  haptic('light');
+  renderChips();
+  renderCatalog();
+  syncCompareUI();
+}
+
+function clearCompare() {
+  state.compare = [];
+  renderChips();
+  renderCatalog();
+  syncCompareUI();
+  closeCompareModal();
+}
+
+/* Обновляем плавающую панель и позицию над корзиной */
+function syncCompareUI() {
+  const n = state.compare.length;
+  if (compareCountEl) compareCountEl.textContent = n;
+  if (compareBarEl) compareBarEl.classList.toggle('open', n > 0);
+  positionCompareBar();
+  updateBackButton();
+}
+
+function positionCompareBar() {
+  if (!compareBarEl || !cartBarEl) return;
+  const open = cartBarEl.classList.contains('open');
+  const h = open ? cartBarEl.offsetHeight : 0;
+  compareBarEl.style.bottom = 'calc(env(safe-area-inset-bottom, 0px) + ' + (h + 14) + 'px)';
+}
 
 /* ===== Инициализация Telegram ===== */
 function initTelegram() {
@@ -74,12 +537,19 @@ function initTelegram() {
     if (value) document.documentElement.style.setProperty(cssVar, value);
   });
 
-  // BackButton: сначала закрывает админ-модалку, иначе — если корзина не пуста,
-  // очищает её, а если пуста — закрывает приложение
+  // BackButton: модалки по очереди, иначе корзина / закрытие приложения
   if (tg.BackButton) {
     tg.BackButton.onClick(() => {
-      if (adminModal && adminModal.classList.contains('open')) {
-        closeAdmin();
+      if (detailModal.classList.contains('open')) {
+        closeDetail();
+        return;
+      }
+      if (statsModal.classList.contains('open')) {
+        closeStats();
+        return;
+      }
+      if (compareModal.classList.contains('open')) {
+        closeCompareModal();
         return;
       }
       if (state.cart.size > 0) {
@@ -93,25 +563,109 @@ function initTelegram() {
   }
 }
 
+/* ===== Тема ===== */
+function applyTheme() {
+  let saved = 'dark';
+  try { saved = localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) {}
+  document.documentElement.classList.toggle('light', saved === 'light');
+  updateThemeIcon();
+}
+
+function toggleTheme() {
+  const light = document.documentElement.classList.toggle('light');
+  try { localStorage.setItem(THEME_KEY, light ? 'light' : 'dark'); } catch (e) {}
+  updateThemeIcon();
+}
+
+function updateThemeIcon() {
+  if (!themeToggle) return;
+  themeToggle.textContent = document.documentElement.classList.contains('light') ? '☀️' : '🌙';
+}
+
+/* ===== Прелоадер ===== */
+function showLoader(visible) {
+  if (!loaderEl) return;
+  loaderEl.classList.toggle('hide', !visible);
+  loaderEl.setAttribute('aria-hidden', String(!visible));
+}
+
+/* ===== Нормализация данных (устойчивость к ручной правке JSON) ===== */
+function normalizeItems(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  raw.forEach((item, index) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return;
+    const numId = Number(item.id);
+    const id = (Number.isFinite(numId) && !Number.isNaN(numId)) ? numId : index + 1;
+    const num = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    out.push({
+      id: id,
+      name: (typeof item.name === 'string' && item.name.trim() !== '') ? item.name : 'Без названия',
+      brand: typeof item.brand === 'string' ? item.brand : '',
+      category: (typeof item.category === 'string' && item.category.trim() !== '') ? item.category : 'Другое',
+      price: num(item.price),
+      oldPrice: num(item.oldPrice),
+      description: typeof item.description === 'string' ? item.description : '',
+      image: typeof item.image === 'string' ? item.image : '',
+      badge: typeof item.badge === 'string' ? item.badge : '',
+      emoji: typeof item.emoji === 'string' ? item.emoji : '',
+      available: item.available !== false
+    });
+  });
+  return out;
+}
+
+/*
+ * parseJsonFile(text, filename):
+ * возвращает { ok: true, data } или { ok: false, message } —
+ * при невалидном JSON интерфейс не падает, а показывает понятное сообщение.
+ */
+function parseJsonFile(text, filename) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    const msg = err && err.message ? err.message : 'неизвестная ошибка';
+    return { ok: false, message: 'Ошибка в файле ' + filename + ': ' + msg + '. Проверьте запятые, кавычки и скобки.' };
+  }
+  if (!Array.isArray(data)) {
+    return { ok: false, message: 'Ошибка в файле ' + filename + ': ожидался массив записей. Проверьте запятые, кавычки и скобки.' };
+  }
+  return { ok: true, data: normalizeItems(data) };
+}
+
 /* ===== Загрузка товаров ===== */
 async function loadProducts() {
+  showLoader(true);
   try {
     const response = await fetch('products.json');
     if (!response.ok) {
       throw new Error('Ошибка HTTP ' + response.status);
     }
-    const data = await response.json();
-    state.products = Array.isArray(data) ? data : [];
+    const parsed = parseJsonFile(await response.text(), 'products.json');
+    if (!parsed.ok) {
+      showLoader(false);
+      showLoadError(parsed.message, true);
+      return;
+    }
+    state.products = parsed.data;
   } catch (err) {
-    showLoadError(err && err.message ? err.message : 'неизвестная ошибка');
+    showLoader(false);
+    showLoadError(err && err.message ? err.message : 'неизвестная ошибка', false);
     return;
   }
+  showLoader(false);
+  hideSkeleton();
   renderChips();
+  renderChips2();
   renderCatalog();
-  fillCategoryList();
 }
 
-function showLoadError(message) {
+function showLoadError(message, isParseError) {
+  hideSkeleton();
   catalogEl.replaceChildren();
   emptyStateEl.hidden = true;
 
@@ -121,21 +675,60 @@ function showLoadError(message) {
   const emoji = document.createElement('div');
   emoji.className = 'error-emoji';
   emoji.textContent = '⚠️';
+  box.appendChild(emoji);
 
-  const title = document.createElement('p');
-  title.textContent = 'Не удалось загрузить товары';
+  if (isParseError) {
+    const p = document.createElement('p');
+    p.textContent = message;
+    box.appendChild(p);
+  } else {
+    const title = document.createElement('p');
+    title.textContent = 'Не удалось загрузить товары';
 
-  const sub = document.createElement('p');
-  sub.className = 'error-sub';
-  sub.textContent = message + '. Проверьте, что файл products.json лежит рядом с index.html.';
+    const sub = document.createElement('p');
+    sub.className = 'error-sub';
+    sub.textContent = message + '. Проверьте, что файл products.json лежит рядом с index.html.';
+    box.append(title, sub);
+  }
 
-  box.append(emoji, title, sub);
   catalogEl.appendChild(box);
 }
 
-/* ===== Чипы категорий ===== */
+/* ===== Чипы категорий (+ счётчики на весь каталог) ===== */
 function renderChips() {
   chipsEl.replaceChildren();
+
+  // Чип «❤ Избранное» — в начале списка, счётчик = число избранных
+  const favChip = document.createElement('button');
+  favChip.type = 'button';
+  favChip.className = 'chip fav-chip' + (state.favOnly ? ' active' : '');
+  favChip.dataset.fav = '';
+  favChip.setAttribute('aria-pressed', String(state.favOnly));
+  const favLabel = document.createElement('span');
+  favLabel.textContent = '❤ Избранное';
+  favChip.appendChild(favLabel);
+  const favBadge = document.createElement('span');
+  favBadge.className = 'chip-badge';
+  favBadge.textContent = state.favs.size;
+  favChip.appendChild(favBadge);
+  chipsEl.appendChild(favChip);
+
+  // Чип «⚖️ Сравнить» (вейп)
+  const compareChip = document.createElement('button');
+  compareChip.type = 'button';
+  compareChip.className = 'chip compare-chip' + (state.compareOnly ? ' active' : '');
+  compareChip.setAttribute('data-compareChip', '');
+  compareChip.setAttribute('aria-pressed', String(state.compareOnly));
+  const compareLabel = document.createElement('span');
+  compareLabel.textContent = '⚖️ Сравнить';
+  compareChip.appendChild(compareLabel);
+  if (state.compare.length > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'chip-badge';
+    badge.textContent = state.compare.length;
+    compareChip.appendChild(badge);
+  }
+  chipsEl.appendChild(compareChip);
 
   const categories = ['Все', ...new Set(
     state.products.map((p) => p.category).filter(Boolean)
@@ -144,65 +737,293 @@ function renderChips() {
   categories.forEach((category) => {
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = 'chip' + (category === state.category ? ' active' : '');
-    chip.textContent = category;
+    chip.className = 'chip' + ((category === state.category && !state.favOnly && !state.compareOnly) ? ' active' : '');
     chip.dataset.category = category;
+    const label = document.createElement('span');
+    label.textContent = category;
+    chip.appendChild(label);
+    // Счётчик: сколько записей в этой категории во ВСЁМ каталоге
+    if (category !== 'Все') {
+      const count = state.products.filter((p) => p.category === category).length;
+      const counter = document.createElement('span');
+      counter.className = 'chip-count';
+      counter.textContent = count;
+      chip.appendChild(counter);
+    }
     chipsEl.appendChild(chip);
+  });
+
+  // Тоггл-чип «✓ В наличии»
+  const stockChip = document.createElement('button');
+  stockChip.type = 'button';
+  stockChip.className = 'chip toggle-chip' + (state.inStockOnly ? ' active' : '');
+  stockChip.dataset.toggle = 'stock';
+  stockChip.setAttribute('aria-pressed', String(state.inStockOnly));
+  stockChip.textContent = state.inStockOnly ? '✓ В наличии' : 'В наличии';
+  chipsEl.appendChild(stockChip);
+}
+
+/* ===== Второй ряд чипов: бренды (максимум 8) ===== */
+function renderChips2() {
+  if (!chips2El) return;
+  chips2El.replaceChildren();
+
+  const brands = [...new Set(
+    state.products.map((p) => p.brand).filter(Boolean)
+  )].slice(0, 8);
+
+  const allChip = document.createElement('button');
+  allChip.type = 'button';
+  allChip.className = 'chip' + (state.brand === 'Все бренды' ? ' active' : '');
+  allChip.dataset.brand = 'Все бренды';
+  allChip.textContent = 'Все бренды';
+  chips2El.appendChild(allChip);
+
+  brands.forEach((brand) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip' + (state.brand === brand ? ' active' : '');
+    chip.dataset.brand = brand;
+    chip.textContent = brand;
+    chips2El.appendChild(chip);
+  });
+
+  // Диапазоны цены (взаимоисключающие, повторный клик снимает)
+  PRICE_RANGES.forEach((range) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip price-chip' + (state.priceRange === range.key ? ' active' : '');
+    chip.dataset.price = range.key;
+    chip.setAttribute('aria-pressed', String(state.priceRange === range.key));
+    chip.textContent = range.label;
+    chips2El.appendChild(chip);
   });
 }
 
-/* ===== Рендер каталога ===== */
-function renderCatalog() {
+/* ===== Фильтры и сортировка ===== */
+function getFiltered() {
   const query = state.search.trim().toLowerCase();
+  const range = state.priceRange
+    ? PRICE_RANGES.find((r) => r.key === state.priceRange)
+    : null;
 
   const filtered = state.products.filter((product) => {
     const byCategory = state.category === 'Все' || product.category === state.category;
+    const byBrand = state.brand === 'Все бренды' || product.brand === state.brand;
+    const byFav = !state.favOnly || state.favs.has(product.id);
+    const byCompare = !state.compareOnly || state.compare.includes(Number(product.id));
+    const byStock = !state.inStockOnly || product.available !== false;
+    const byPrice = !range || range.test(Number(product.price) || 0);
     const haystack = String(product.name + ' ' + (product.brand || '')).toLowerCase();
     const bySearch = !query || haystack.includes(query);
-    return byCategory && bySearch;
+    return byCategory && byBrand && byFav && byCompare && byStock && byPrice && bySearch;
   });
+
+  // Активный чип «Сравнить»: порядок = порядок добавления в сравнение
+  if (state.compareOnly) {
+    const byId = new Map(filtered.map((p) => [Number(p.id), p]));
+    return state.compare.map((id) => byId.get(id)).filter(Boolean);
+  }
+
+  const sort = state.sort;
+  filtered.sort((a, b) => {
+    let cmp = 0;
+    if (sort === 'name') {
+      cmp = String(a.name || '').localeCompare(String(b.name || ''), 'ru');
+    } else if (sort === 'price_asc') {
+      cmp = effectivePrice(a) - effectivePrice(b);
+    } else if (sort === 'price_desc') {
+      cmp = effectivePrice(b) - effectivePrice(a);
+    } else {
+      cmp = Number(a.id) - Number(b.id); // «По умолчанию»
+    }
+    if (cmp !== 0) return cmp;
+    return Number(a.id) - Number(b.id);
+  });
+
+  return filtered;
+}
+
+/* Актуальная цена со скидкой: учитывается oldPrice (берём минимальную из price/oldPrice) */
+function effectivePrice(product) {
+  const price = Number(product.price) || 0;
+  const old = Number(product.oldPrice) || 0;
+  return (old > 0 && old < price) ? old : price;
+}
+
+/* ===== Сброс фильтров ===== */
+function hasActiveFilters() {
+  return Boolean(state.search.trim()) ||
+    state.category !== 'Все' ||
+    state.favOnly ||
+    state.compareOnly ||
+    state.inStockOnly ||
+    state.sort !== 'id' ||
+    state.brand !== 'Все бренды' ||
+    Boolean(state.priceRange);
+}
+
+function updateResetBtn() {
+  if (!resetBtn) return;
+  resetBtn.classList.toggle('hidden', !hasActiveFilters());
+}
+
+function resetFilters() {
+  state.search = '';
+  if (searchInput) searchInput.value = '';
+  state.category = 'Все';
+  state.brand = 'Все бренды';
+  state.priceRange = null;
+  state.favOnly = false;
+  state.compareOnly = false;
+  state.inStockOnly = false;
+  state.sort = 'id';
+  if (sortSelect) sortSelect.value = 'id';
+  updateSearchClear();
+  updateResetBtn();
+  renderChips();
+  renderChips2();
+  renderCatalog();
+}
+
+/* Данные каталога изменяются только через products.json на GitHub */
+
+/* ===== Поиск: очистка «✕» + дебаунс ===== */
+function updateSearchClear(value) {
+  if (!searchClear) return;
+  const hasText = value !== undefined ? String(value).length > 0 : Boolean(searchInput && searchInput.value.length > 0);
+  searchClear.classList.toggle('hidden', !hasText);
+}
+
+let searchTimer = null;
+
+/* Полная очистка поиска (используется кнопкой ✕, Esc и тегами фильтров) */
+function clearSearch() {
+  clearTimeout(searchTimer);
+  state.search = '';
+  if (searchInput) searchInput.value = '';
+  updateSearchClear('');
+  renderCatalog();
+}
+
+/* ===== Рендер ===== */
+function renderCount() {
+  if (!countLabel) return;
+  const total = state.products.length;
+  const shown = getFiltered().length;
+  if (!hasActiveFilters()) {
+    countLabel.textContent = total + ' ' + plural(total, 'запись', 'записи', 'записей');
+  } else {
+    countLabel.textContent = 'Показано ' + shown + ' из ' + total;
+  }
+}
+
+function plural(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+function renderCatalog() {
+  renderCount();
+  renderActiveFilters();
+  const query = state.search.trim().toLowerCase();
+
+  // Всегда рендерим отфильтрованный список из state.products
+  const filtered = getFiltered();
+
+  // Лимит «Показать ещё» сбрасывается в 24 при смене фильтров/поиска/сортировки
+  const sig = filtersSignature();
+  if (state.sig !== sig) {
+    state.sig = sig;
+    state.limit = PAGE_SIZE;
+  }
+  const visible = filtered.slice(0, state.limit);
 
   catalogEl.replaceChildren();
 
   if (filtered.length === 0) {
+    hideSkeleton();
     emptyStateEl.hidden = false;
+    renderLoadMore(0, 0);
     renderCartBar();
+    updateResetBtn();
     return;
   }
   emptyStateEl.hidden = true;
+  hideSkeleton();
 
-  filtered.forEach((product) => catalogEl.appendChild(createCard(product)));
+  visible.forEach((product, i) => {
+    const card = createCard(product);
+    // Стаггер-анимация: порядковый номер в --i
+    card.style.setProperty('--i', String(i));
+    // Подсветка поиска: только в названии и бренде, безопасно (без innerHTML)
+    if (query) {
+      const nameEl = card.querySelector('.card-name');
+      const brandEl = card.querySelector('.card-brand');
+      if (nameEl) markText(nameEl, query);
+      if (brandEl && brandEl.textContent.trim()) markText(brandEl, query);
+    }
+    catalogEl.appendChild(card);
+  });
+  renderLoadMore(visible.length, filtered.length);
   renderCartBar();
+  updateResetBtn();
 }
 
+/* ===== Подсветка поиска (безопасно: обход текстовых узлов, без innerHTML) ===== */
+function markText(element, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return;
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+  textNodes.forEach((node) => {
+    const text = node.nodeValue || '';
+    if (!text.toLowerCase().includes(q)) return;
+
+    const fragment = document.createDocumentFragment();
+    let rest = text;
+    let index = rest.toLowerCase().indexOf(q);
+
+    while (index !== -1) {
+      if (index > 0) fragment.appendChild(document.createTextNode(rest.slice(0, index)));
+      const mark = document.createElement('mark');
+      mark.textContent = rest.slice(index, index + q.length);
+      fragment.appendChild(mark);
+      rest = rest.slice(index + q.length);
+      index = rest.toLowerCase().indexOf(q);
+    }
+    if (rest) fragment.appendChild(document.createTextNode(rest));
+    node.parentNode.replaceChild(fragment, node);
+  });
+}
+
+/* ===== Карточка товара ===== */
 function createCard(product) {
   const card = document.createElement('article');
   card.className = 'card' + (product.available === false ? ' unavailable' : '');
   card.dataset.id = product.id;
   if (product.description) card.title = product.description;
 
-  // Эмодзи берётся только из внутренних источников (никогда из пользовательского HTML)
-  const emoji = product.emoji || CATEGORY_EMOJI[product.category] || DEFAULT_EMOJI;
+  // Сердечко избранного (top-right, поверх подложки)
+  const favBtn = document.createElement('button');
+  const isFav = state.favs.has(product.id);
+  favBtn.type = 'button';
+  favBtn.className = 'fav-btn' + (isFav ? ' active' : '');
+  favBtn.dataset.id = product.id;
+  favBtn.setAttribute('aria-label', isFav ? 'Убрать из избранного' : 'Добавить в избранное');
+  favBtn.setAttribute('aria-pressed', String(isFav));
+  favBtn.textContent = isFav ? '❤' : '🤍';
+  card.appendChild(favBtn);
 
   const media = document.createElement('div');
   media.className = 'card-media';
-
-  const emojiBox = document.createElement('div');
-  emojiBox.className = 'card-emoji';
-  emojiBox.textContent = emoji;
-
-  if (product.image) {
-    const img = document.createElement('img');
-    img.className = 'card-img';
-    img.alt = product.name || 'Товар';
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.src = product.image;
-    img.addEventListener('error', () => img.replaceWith(emojiBox));
-    media.appendChild(img);
-  } else {
-    media.appendChild(emojiBox);
-  }
+  media.appendChild(buildMediaEl(product, 'card-img'));
 
   if (product.badge) {
     const badge = document.createElement('span');
@@ -237,7 +1058,12 @@ function createCard(product) {
     priceRow.appendChild(oldPrice);
   }
 
-  card.append(media, name, brand, priceRow, createControls(product));
+  // Обёртка «имя + бренд + цена» — в режиме строк идёт в центре строки
+  const infoWrap = document.createElement('div');
+  infoWrap.className = 'card-row-info';
+  infoWrap.append(name, brand, priceRow);
+
+  card.append(media, infoWrap, createControls(product));
 
   // Оверлей «Нет в наличии» поверх приглушённой карточки
   if (product.available === false) {
@@ -255,52 +1081,61 @@ function createControls(product) {
   controls.className = 'card-controls';
 
   if (product.available === false) {
-    // Заблокированная карточка: оверлей уже добавлен в createCard,
-    // в зоне контролов просто оставляем заглушку по высоте
     const holder = document.createElement('div');
     holder.className = 'qty-row holder';
     controls.appendChild(holder);
-    return controls;
-  }
-
-  const qty = state.cart.get(product.id) || 0;
-  const wrap = document.createElement('div');
-  wrap.className = 'qty-row';
-
-  if (qty > 0) {
-    const minus = document.createElement('button');
-    minus.type = 'button';
-    minus.className = 'qty-btn';
-    minus.textContent = '−';
-    minus.dataset.action = 'minus';
-    minus.dataset.id = product.id;
-    minus.setAttribute('aria-label', 'Убрать одну штуку');
-
-    const count = document.createElement('span');
-    count.className = 'qty-count';
-    count.textContent = qty;
-
-    const plus = document.createElement('button');
-    plus.type = 'button';
-    plus.className = 'qty-btn plus';
-    plus.textContent = '+';
-    plus.dataset.action = 'plus';
-    plus.dataset.id = product.id;
-    plus.setAttribute('aria-label', 'Добавить ещё одну штуку');
-
-    wrap.append(minus, count, plus);
   } else {
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'add-btn';
-    add.textContent = '+';
-    add.dataset.action = 'plus';
-    add.dataset.id = product.id;
-    add.setAttribute('aria-label', 'Добавить в корзину');
-    wrap.appendChild(add);
+    const qty = state.cart.get(product.id) || 0;
+    const wrap = document.createElement('div');
+    wrap.className = 'qty-row';
+
+    if (qty > 0) {
+      const minus = document.createElement('button');
+      minus.type = 'button';
+      minus.className = 'qty-btn';
+      minus.textContent = '−';
+      minus.dataset.action = 'minus';
+      minus.dataset.id = product.id;
+      minus.setAttribute('aria-label', 'Убрать одну штуку');
+
+      const count = document.createElement('span');
+      count.className = 'qty-count';
+      count.textContent = qty;
+
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'qty-btn plus';
+      plus.textContent = '+';
+      plus.dataset.action = 'plus';
+      plus.dataset.id = product.id;
+      plus.setAttribute('aria-label', 'Добавить ещё одну штуку');
+
+      wrap.append(minus, count, plus);
+    } else {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'add-btn';
+      add.textContent = '+';
+      add.dataset.action = 'plus';
+      add.dataset.id = product.id;
+      add.setAttribute('aria-label', 'Добавить в корзину');
+      wrap.appendChild(add);
+    }
+
+    controls.appendChild(wrap);
   }
 
-  controls.appendChild(wrap);
+  // Кнопка «⚖️» сравнения — 32px круг, внизу-справа, не конфликтует со степпером
+  const isCmp = state.compare.map(Number).includes(Number(product.id));
+  const cmpBtn = document.createElement('button');
+  cmpBtn.type = 'button';
+  cmpBtn.className = 'compare-card-btn' + (isCmp ? ' active' : '');
+  cmpBtn.dataset.compare = product.id;
+  cmpBtn.setAttribute('aria-label', isCmp ? 'Убрать из сравнения' : 'Добавить в сравнение');
+  cmpBtn.setAttribute('aria-pressed', String(isCmp));
+  cmpBtn.textContent = '⚖️';
+  controls.appendChild(cmpBtn);
+
   return controls;
 }
 
@@ -322,6 +1157,18 @@ function cartTotal() {
     if (product) sum += (product.price || 0) * qty;
   });
   return sum;
+}
+
+function updateBackButton() {
+  if (!tg || !tg.BackButton) return;
+  const anyOpen = detailModal.classList.contains('open') ||
+    statsModal.classList.contains('open') ||
+    compareModal.classList.contains('open');
+  if (anyOpen || state.cart.size > 0) {
+    tg.BackButton.show();
+  } else {
+    tg.BackButton.hide();
+  }
 }
 
 function renderCartBar() {
@@ -353,15 +1200,13 @@ function renderCartBar() {
   cartBarEl.classList.toggle('open', hasItems);
   document.body.classList.toggle('has-cart', hasItems);
 
-  if (tg && tg.BackButton) {
-    if (adminModal && adminModal.classList.contains('open')) tg.BackButton.show();
-    else if (hasItems) tg.BackButton.show();
-    else tg.BackButton.hide();
-  }
+  updateBackButton();
+  positionCompareBar();
 }
 
 function addToCart(id) {
   state.cart.set(id, (state.cart.get(id) || 0) + 1);
+  haptic('success');
   renderAll();
 }
 
@@ -377,20 +1222,71 @@ function renderAll() {
 }
 
 /* ===== Отправка заказа ===== */
-function buildOrderText() {
-  const lines = ['Заказ:'];
-  let index = 0;
+
+/* Лимит длины готовой ссылки: Telegram ограничивает размер предзаполненного текста */
+const ORDER_LINK_LIMIT = 3800;
+
+/* Позиции корзины для заказа: [{ name, qty, sum }, ...] */
+function cartItemsForOrder() {
+  const items = [];
   state.cart.forEach((qty, id) => {
     const product = state.products.find((p) => p.id === id);
     if (!product) return;
-    index += 1;
+    items.push({
+      name: product.name || 'Товар',
+      qty: qty,
+      sum: (product.price || 0) * qty
+    });
+  });
+  return items;
+}
+
+/* Чистая функция: текст заказа в прежнем формате */
+function buildOrderText(cartItems, total) {
+  const lines = ['Заказ:'];
+  (cartItems || []).forEach((item, i) => {
     lines.push(
-      index + ') ' + (product.name || 'Товар') +
-      ' — ' + qty + ' шт — ' + ((product.price || 0) * qty) + ' ₽'
+      (i + 1) + ') ' + ((item && item.name) || 'Товар') +
+      ' — ' + ((item && item.qty) || 0) + ' шт — ' + ((item && item.sum) || 0) + ' ₽'
     );
   });
-  lines.push('Итого: ' + cartTotal() + ' ₽');
+  lines.push('Итого: ' + (Number(total) || 0) + ' ₽');
   return lines.join('\n');
+}
+
+/* Чистая функция: ссылка на чат с предзаполненным текстом заказа */
+function buildOrderLink(username, text) {
+  return 'https://t.me/' + username + '?text=' + encodeURIComponent(text);
+}
+
+/* Чистая функция: обрезает список позиций, чтобы ссылка влезла в лимит */
+function fitOrderText(items, total, username, limit) {
+  const user = username || CONFIG.contactUsername;
+  const maxUrl = Number(limit) || ORDER_LINK_LIMIT;
+  const list = Array.isArray(items) ? items : [];
+
+  const full = buildOrderText(list, total);
+  if (buildOrderLink(user, full).length <= maxUrl) return full;
+
+  // Режем только целые позиции (не посреди строки), добавляем «…и ещё N позиций»
+  for (let keep = list.length - 1; keep >= 0; keep -= 1) {
+    const omitted = list.length - keep;
+    const text = buildOrderText(list.slice(0, keep), total) +
+      '\n…и ещё ' + omitted + ' позиций';
+    if (buildOrderLink(user, text).length <= maxUrl) return text;
+  }
+
+  return 'Заказ:\nИтого: ' + (Number(total) || 0) + ' ₽';
+}
+
+/* Открытие ссылки: Telegram Mini App, иначе обычное окно */
+function openTelegramLink(url) {
+  const wa = window.Telegram && window.Telegram.WebApp;
+  if (wa && typeof wa.openTelegramLink === 'function') {
+    wa.openTelegramLink(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
 }
 
 async function copyText(text) {
@@ -420,22 +1316,19 @@ async function copyText(text) {
   return ok;
 }
 
-async function sendOrder() {
+function sendOrder() {
   if (state.cart.size === 0) {
     showToast('Корзина пуста');
     return;
   }
 
-  const text = buildOrderText();
-  const copied = await copyText(text);
-  showToast(copied ? 'Заказ скопирован! Отправьте его в чат' : 'Не удалось скопировать заказ');
+  const text = fitOrderText(cartItemsForOrder(), cartTotal());
+  const link = buildOrderLink(CONFIG.contactUsername, text);
 
-  const url = 'https://t.me/' + CONFIG.contactUsername;
-  if (tg && typeof tg.openTelegramLink === 'function') {
-    tg.openTelegramLink(url);
-  } else {
-    window.open(url, '_blank', 'noopener');
-  }
+  haptic('success');
+  openTelegramLink(link);
+  showToast('Открываю чат с продавцом — нажмите «Отправить» в Telegram');
+  // Корзину намеренно не очищаем: заказ можно поправить и отправить повторно
 }
 
 /* ===== Тост ===== */
@@ -448,26 +1341,619 @@ function showToast(message) {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3200);
 }
 
+/* ===== Модалка деталей ===== */
+function openDetail(item) {
+  detailItem = item;
+  renderDetail(item);
+  rememberScroll();
+  detailModal.classList.add('open');
+  detailModal.setAttribute('aria-hidden', 'false');
+  updateBackButton();
+}
+
+function closeDetail() {
+  detailModal.classList.remove('open');
+  detailModal.setAttribute('aria-hidden', 'true');
+  detailItem = null;
+  updateBackButton();
+  restoreScroll();
+}
+
+function renderDetail(item) {
+  detailBody.replaceChildren();
+
+  // Медиа-шапка: фото или эмодзи-заглушка (buildMediaEl, 120px)
+  const media = document.createElement('div');
+  media.className = 'detail-media';
+  media.appendChild(buildMediaEl(item, 'modal-media'));
+
+  if (item.badge) {
+    const badge = document.createElement('span');
+    let badgeClass = 'badge detail-badge';
+    if (item.badge === '-20%') badgeClass += ' badge-sale';
+    else if (item.badge === 'хит') badgeClass += ' badge-hot';
+    badge.className = badgeClass;
+    badge.textContent = item.badge;
+    media.appendChild(badge);
+  }
+  detailBody.appendChild(media);
+
+  // Название
+  const name = document.createElement('h2');
+  name.className = 'detail-name';
+  name.textContent = item.name || 'Без названия';
+  detailBody.appendChild(name);
+
+  // Бренд-бейдж
+  if (item.brand) {
+    const brand = document.createElement('span');
+    brand.className = 'detail-brand';
+    brand.textContent = item.brand;
+    detailBody.appendChild(brand);
+  }
+
+  // Цена
+  const priceRow = document.createElement('div');
+  priceRow.className = 'detail-price-row';
+
+  const price = document.createElement('span');
+  price.className = 'detail-price';
+  price.textContent = formatPrice(item.price);
+  priceRow.appendChild(price);
+
+  if (item.oldPrice && item.oldPrice > item.price) {
+    const old = document.createElement('span');
+    old.className = 'detail-old-price';
+    old.textContent = formatPrice(item.oldPrice);
+    priceRow.appendChild(old);
+  }
+  detailBody.appendChild(priceRow);
+
+  // Кликабельная категория: «📁 <категория>»
+  if (item.category) {
+    const catBtn = document.createElement('button');
+    catBtn.type = 'button';
+    catBtn.className = 'detail-category-btn';
+    catBtn.textContent = '📁 ' + item.category;
+    detailBody.appendChild(catBtn);
+  }
+
+  // Наличие
+  const stock = document.createElement('p');
+  stock.className = 'detail-stock' + (item.available === false ? ' out' : '');
+  stock.textContent = item.available === false ? 'Нет в наличии' : 'В наличии';
+  detailBody.appendChild(stock);
+
+  // Описание — полное, без clamp
+  if (item.description) {
+    const desc = document.createElement('p');
+    desc.className = 'detail-desc';
+    desc.textContent = item.description;
+    detailBody.appendChild(desc);
+  }
+
+  // Кнопки CTA
+  const actions = document.createElement('div');
+  actions.className = 'detail-actions';
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'detail-add-btn';
+  addBtn.textContent = '+ В корзину';
+  addBtn.disabled = item.available === false;
+  actions.appendChild(addBtn);
+
+  const inCompare = state.compare.map(Number).includes(Number(item.id));
+  const compareBtn = document.createElement('button');
+  compareBtn.type = 'button';
+  compareBtn.className = 'detail-compare-btn' + (inCompare ? ' active' : '');
+  compareBtn.textContent = inCompare ? '⚖️ В сравнении' : '⚖️ Сравнить';
+  actions.appendChild(compareBtn);
+
+  const shareBtn = document.createElement('button');
+  shareBtn.type = 'button';
+  shareBtn.className = 'detail-share-btn';
+  shareBtn.textContent = 'Поделиться';
+  actions.appendChild(shareBtn);
+
+  detailBody.appendChild(actions);
+}
+
+async function shareProduct() {
+  const item = detailItem;
+  if (!item) return;
+  const text = '🔞 ' + (item.name || '') + ' ' + (item.brand || '') +
+    ' — ' + formatPrice(item.price) + '\nПодробнее в VapeCatalog';
+  const ok = await copyText(text);
+  showToast(ok ? 'Скопировано' : 'Не удалось скопировать');
+}
+
+/* ===== Статистика ===== */
+function openStats() {
+  renderStats();
+  rememberScroll();
+  statsModal.classList.add('open');
+  statsModal.setAttribute('aria-hidden', 'false');
+  updateBackButton();
+}
+
+function closeStats() {
+  statsModal.classList.remove('open');
+  statsModal.setAttribute('aria-hidden', 'true');
+  updateBackButton();
+  restoreScroll();
+}
+
+function makeStatRow(label, value, cls) {
+  const row = document.createElement('div');
+  row.className = 'stat-row';
+  const lab = document.createElement('span');
+  lab.className = 'stat-label';
+  lab.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'stat-value' + (cls ? ' ' + cls : '');
+  val.textContent = value;
+  row.append(lab, val);
+  return row;
+}
+
+function renderStats() {
+  statsBody.replaceChildren();
+
+  const all = state.products;
+  const available = all.filter((p) => p.available !== false);
+  const categoriesCount = new Set(all.map((p) => p.category).filter(Boolean)).size;
+
+  const sumPrices = available.reduce((s, p) => s + effectivePrice(p), 0);
+  const avgPrice = available.length > 0 ? sumPrices / available.length : 0;
+
+  const promos = all.filter((p) =>
+    (Number(p.oldPrice) || 0) > (Number(p.price) || 0) ||
+    (p.badge && String(p.badge).trim().length > 0)
+  ).length;
+
+  const sortedByPrice = available.slice().sort((a, b) => effectivePrice(a) - effectivePrice(b));
+  const cheapest = sortedByPrice[0];
+  const mostExpensive = sortedByPrice[sortedByPrice.length - 1];
+
+  statsBody.appendChild(makeStatRow('Всего товаров', String(all.length)));
+  statsBody.appendChild(makeStatRow('В наличии', String(available.length)));
+  statsBody.appendChild(makeStatRow('Категорий', String(categoriesCount)));
+  statsBody.appendChild(makeStatRow('Средняя цена (в наличии)', formatPrice(avgPrice), 'accent'));
+  statsBody.appendChild(makeStatRow('Акций', String(promos), 'accent'));
+  statsBody.appendChild(makeStatRow('Самый дорогой',
+    mostExpensive ? (mostExpensive.name + ' — ' + formatPrice(effectivePrice(mostExpensive))) : '—'));
+  statsBody.appendChild(makeStatRow('Самый дешёвый',
+    cheapest ? (cheapest.name + ' — ' + formatPrice(effectivePrice(cheapest))) : '—'));
+
+  // «Написать продавцу» — личный чат через openTelegramLink / window.open
+  if (CONFIG.contactUsername) {
+    const writeBtn = document.createElement('button');
+    writeBtn.type = 'button';
+    writeBtn.className = 'stat-action-btn';
+    writeBtn.textContent = '✉️ Написать продавцу';
+    writeBtn.addEventListener('click', () => {
+      haptic('light');
+      openTelegramLink('https://t.me/' + CONFIG.contactUsername);
+    });
+    statsBody.appendChild(writeBtn);
+  }
+}
+
+/* ===== Экспорт выборки ===== */
+function formatDate(date) {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  return dd + '.' + mm + '.' + date.getFullYear();
+}
+
+function exportSelection() {
+  const items = getFiltered();
+  if (items.length === 0) {
+    showToast('Нет записей для экспорта');
+    return;
+  }
+
+  const lines = ['Прайс VapeCatalog ' + formatDate(new Date()), ''];
+  items.forEach((p, i) => {
+    const price = Number(p.price || 0).toLocaleString('ru-RU');
+    lines.push((i + 1) + ') ' + (p.name || 'Без названия') +
+      ' (' + (p.brand || '') + ') — ' + price + ' ₽');
+  });
+
+  const text = lines.join('\n');
+  copyText(text).then((ok) => {
+    showToast(ok ? 'Прайс скопирован (' + items.length + ')' : 'Не удалось скопировать прайс');
+  });
+}
+
+/* ===== Сравнение: модалка ===== */
+function openCompareModal() {
+  if (state.compare.length === 0) {
+    showToast('Список сравнения пуст');
+    return;
+  }
+  renderCompareTable();
+  rememberScroll();
+  compareModal.classList.add('open');
+  compareModal.setAttribute('aria-hidden', 'false');
+  updateBackButton();
+}
+
+function closeCompareModal() {
+  compareModal.classList.remove('open');
+  compareModal.setAttribute('aria-hidden', 'true');
+  updateBackButton();
+  restoreScroll();
+}
+
+function compareDiscount(p) {
+  const price = Number(p.price) || 0;
+  const old = Number(p.oldPrice) || 0;
+  if (old > 0 && old > price) {
+    return Math.round((1 - price / old) * 100);
+  }
+  return null;
+}
+
+function renderCompareTable() {
+  compareBody.replaceChildren();
+
+  const items = state.compare
+    .map(Number)
+    .map((id) => state.products.find((p) => Number(p.id) === Number(id)))
+    .filter(Boolean);
+
+  if (items.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'compare-empty';
+    empty.textContent = 'Добавьте товары для сравнения (кнопка ⚖️ на карточке или в карточке товара)';
+    compareBody.appendChild(empty);
+    return;
+  }
+
+  const availableItems = items.filter((it) => it.available !== false);
+  const bestPrice = availableItems.length > 0
+    ? Math.min.apply(null, availableItems.map((it) => effectivePrice(it)))
+    : null;
+
+  const grid = document.createElement('div');
+  grid.className = 'compare-grid';
+  grid.style.setProperty('--cols', String(items.length));
+
+  // Шапка: пустая ячейка + колонки товаров
+  const headLabel = document.createElement('div');
+  headLabel.className = 'compare-cell compare-label';
+  headLabel.textContent = 'Товары';
+  grid.appendChild(headLabel);
+
+  items.forEach((it) => {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell compare-head';
+
+    const e = document.createElement('div');
+    e.className = 'compare-head-emoji';
+    e.textContent = it.emoji || CATEGORY_EMOJI[it.category] || DEFAULT_EMOJI;
+
+    const n = document.createElement('div');
+    n.className = 'compare-head-name';
+    n.textContent = it.name || 'Без названия';
+
+    const b = document.createElement('div');
+    b.className = 'compare-head-brand';
+    b.textContent = it.brand || '\u00A0';
+
+    cell.append(e, n, b);
+    grid.appendChild(cell);
+  });
+
+  // Цена
+  const priceLabel = document.createElement('div');
+  priceLabel.className = 'compare-cell compare-label';
+  priceLabel.textContent = 'Цена';
+  grid.appendChild(priceLabel);
+
+  items.forEach((it) => {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+    if (it.available === false) {
+      const na = document.createElement('span');
+      na.className = 'compare-price na';
+      na.textContent = '—';
+      cell.appendChild(na);
+    } else {
+      const cur = effectivePrice(it);
+      const price = document.createElement('span');
+      price.className = 'compare-price' + (bestPrice !== null && cur === bestPrice ? ' best' : '');
+      price.textContent = formatPrice(cur);
+      cell.appendChild(price);
+      const old = Number(it.oldPrice) || 0;
+      if (old > 0 && old > cur) {
+        const oldEl = document.createElement('span');
+        oldEl.className = 'compare-old';
+        oldEl.textContent = formatPrice(old);
+        cell.appendChild(oldEl);
+      }
+    }
+    grid.appendChild(cell);
+  });
+
+  // Скидка
+  const discLabel = document.createElement('div');
+  discLabel.className = 'compare-cell compare-label';
+  discLabel.textContent = 'Скидка';
+  grid.appendChild(discLabel);
+
+  items.forEach((it) => {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+    const d = compareDiscount(it);
+    const span = document.createElement('span');
+    if (d !== null) {
+      span.className = 'compare-discount';
+      span.textContent = d + '%';
+    } else {
+      span.className = 'compare-muted';
+      span.textContent = '—';
+    }
+    cell.appendChild(span);
+    grid.appendChild(cell);
+  });
+
+  // Наличие
+  const avLabel = document.createElement('div');
+  avLabel.className = 'compare-cell compare-label';
+  avLabel.textContent = 'Наличие';
+  grid.appendChild(avLabel);
+
+  items.forEach((it) => {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+    const span = document.createElement('span');
+    span.className = it.available === false ? 'compare-avail-no' : 'compare-avail-yes';
+    span.textContent = it.available === false ? 'Нет' : 'Есть';
+    cell.appendChild(span);
+    grid.appendChild(cell);
+  });
+
+  // Категория
+  const catLabel = document.createElement('div');
+  catLabel.className = 'compare-cell compare-label';
+  catLabel.textContent = 'Категория';
+  grid.appendChild(catLabel);
+
+  items.forEach((it) => {
+    const cell = document.createElement('div');
+    cell.className = 'compare-cell';
+    cell.textContent = it.category || '—';
+    grid.appendChild(cell);
+  });
+
+  compareBody.appendChild(grid);
+}
+
+/* ===== «Мне повезёт» ===== */
+function spinLucky(items) {
+  const icons = ['🎲', '🎰', '⭐', '🎯', '🍀'];
+  let step = 0;
+  const total = 4; // 3-4 прокрутки эмодзи
+
+  luckyBtn.classList.add('spinning');
+  const timer = setInterval(() => {
+    luckyBtn.textContent = icons[step % icons.length];
+    step += 1;
+    if (step >= total) {
+      clearInterval(timer);
+      luckyBtn.classList.remove('spinning');
+      luckyBtn.textContent = '🎲';
+      const picked = items[Math.floor(Math.random() * items.length)];
+      openDetail(picked);
+    }
+  }, 120);
+}
+
 /* ===== События ===== */
+document.addEventListener('scroll', function () {
+  if (!toTopBtn) return;
+  toTopBtn.classList.toggle('show', window.scrollY > 600);
+}, { passive: true });
+
+toTopBtn.addEventListener('click', function () {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
 chipsEl.addEventListener('click', (event) => {
   const chip = event.target.closest('.chip');
   if (!chip) return;
-  state.category = chip.dataset.category;
+  let isCategoryChip = false;
+  if (chip.hasAttribute('data-fav')) {
+    state.favOnly = !state.favOnly;
+    if (state.favOnly) {
+      state.category = 'Все';
+      state.compareOnly = false;
+    }
+  } else if (chip.hasAttribute('data-compareChip')) {
+    if (state.compare.length === 0) {
+      showToast('Список сравнения пуст');
+      return;
+    }
+    state.compareOnly = !state.compareOnly;
+    if (state.compareOnly) {
+      state.favOnly = false;
+      state.category = 'Все';
+    }
+  } else if (chip.hasAttribute('data-toggle')) {
+    state.inStockOnly = !state.inStockOnly;
+  } else if (chip.dataset.category !== undefined) {
+    state.category = chip.dataset.category;
+    state.favOnly = false;
+    state.compareOnly = false;
+    isCategoryChip = true;
+  }
+  haptic('light');
   renderChips();
+  renderCatalog();
+  if (isCategoryChip) scrollToCatalog();
+});
+
+chips2El.addEventListener('click', (event) => {
+  const chip = event.target.closest('.chip');
+  if (!chip) return;
+  if (chip.dataset.price !== undefined) {
+    state.priceRange = (state.priceRange === chip.dataset.price) ? null : chip.dataset.price;
+    haptic('light');
+    renderChips2();
+    renderCatalog();
+    return;
+  }
+  if (chip.dataset.brand === undefined) return;
+  state.brand = chip.dataset.brand;
+  haptic('light');
+  renderChips2();
   renderCatalog();
 });
 
 searchInput.addEventListener('input', (event) => {
-  state.search = event.target.value;
+  const value = event.target.value;
+  updateSearchClear(value);
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    state.search = value;
+    renderCatalog();
+  }, 250);
+});
+
+searchClear.addEventListener('click', () => {
+  clearSearch();
+  searchInput.focus();
+});
+
+sortSelect.addEventListener('change', (event) => {
+  state.sort = event.target.value;
+  haptic('light');
   renderCatalog();
 });
 
+resetBtn.addEventListener('click', resetFilters);
+
 catalogEl.addEventListener('click', (event) => {
+  const favBtn = event.target.closest('.fav-btn');
+  if (favBtn) {
+    toggleFav(Number(favBtn.dataset.id));
+    return;
+  }
+
+  const cmpBtn = event.target.closest('.compare-card-btn');
+  if (cmpBtn) {
+    toggleCompare(Number(cmpBtn.dataset.compare));
+    return;
+  }
+
   const btn = event.target.closest('button[data-action]');
-  if (!btn) return;
-  const id = Number(btn.dataset.id);
-  if (btn.dataset.action === 'plus') addToCart(id);
-  else if (btn.dataset.action === 'minus') removeFromCart(id);
+  if (btn) {
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.action === 'plus') addToCart(id);
+    else if (btn.dataset.action === 'minus') removeFromCart(id);
+    return;
+  }
+
+  const card = event.target.closest('.card');
+  if (card && card.dataset.id) {
+    const product = state.products.find((p) => Number(p.id) === Number(card.dataset.id));
+    if (product) openDetail(product);
+  }
+});
+
+detailBody.addEventListener('click', (event) => {
+  const addBtn = event.target.closest('.detail-add-btn');
+  if (addBtn) {
+    if (detailItem) {
+      addToCart(detailItem.id);
+      showToast('Добавлено в корзину');
+    }
+    return;
+  }
+  const compareBtn = event.target.closest('.detail-compare-btn');
+  if (compareBtn) {
+    if (detailItem) {
+      const wasIn = state.compare.map(Number).includes(Number(detailItem.id));
+      const lenBefore = state.compare.length;
+      toggleCompare(detailItem.id);
+      const nowIn = state.compare.map(Number).includes(Number(detailItem.id));
+      if (wasIn) {
+        showToast('Убрано из сравнения');
+        renderDetail(detailItem);
+      } else if (nowIn && state.compare.length === lenBefore + 1) {
+        showToast('Добавлено в сравнение');
+        renderDetail(detailItem);
+      } else if (!nowIn) {
+        // максимум 4 — toast уже показан внутри toggleCompare
+      }
+    }
+    return;
+  }
+  const catBtn = event.target.closest('.detail-category-btn');
+  if (catBtn) {
+    if (detailItem && detailItem.category) {
+      const cat = detailItem.category;
+      closeDetail();
+      state.search = '';
+      searchInput.value = '';
+      state.favOnly = false;
+      state.compareOnly = false;
+      state.category = cat;
+      updateSearchClear();
+      renderChips();
+      renderCatalog();
+      showToast('Категория: ' + cat);
+    }
+    return;
+  }
+  const shareBtn = event.target.closest('.detail-share-btn');
+  if (shareBtn) {
+    shareProduct();
+  }
+});
+
+detailCloseBtn.addEventListener('click', closeDetail);
+detailModal.addEventListener('click', (event) => {
+  if (event.target && event.target.hasAttribute('data-close-detail')) closeDetail();
+});
+
+statsBtn.addEventListener('click', openStats);
+statsCloseBtn.addEventListener('click', closeStats);
+statsModal.addEventListener('click', (event) => {
+  if (event.target && event.target.hasAttribute('data-close-stats')) closeStats();
+});
+
+exportBtn.addEventListener('click', exportSelection);
+
+compareBarBtn.addEventListener('click', openCompareModal);
+compareBarClear.addEventListener('click', () => {
+  clearCompare();
+  showToast('Сравнение очищено');
+});
+compareCloseBtn.addEventListener('click', closeCompareModal);
+compareClearBtn.addEventListener('click', () => {
+  clearCompare();
+  showToast('Сравнение очищено');
+});
+compareModal.addEventListener('click', (event) => {
+  if (event.target && event.target.hasAttribute('data-close-compare')) closeCompareModal();
+});
+
+luckyBtn.addEventListener('click', () => {
+  const items = getFiltered();
+  if (items.length === 0) {
+    showToast('Нет записей для выбора');
+    return;
+  }
+  spinLucky(items);
+});
+
+themeToggle.addEventListener('click', () => {
+  haptic('light');
+  toggleTheme();
 });
 
 sendOrderButton.addEventListener('click', sendOrder);
@@ -483,469 +1969,27 @@ cartButton.addEventListener('click', () => {
   cartBarEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
-/* ===== Админ-режим: добавление товаров через GitHub API ===== */
+/* Новые кнопки удобства */
+refreshBtn.addEventListener('click', refreshCatalog);
+shareBtn.addEventListener('click', shareCatalog);
 
-/* DOM админ-панели */
-const adminOpenBtn = document.getElementById('adminOpenBtn');
-const adminModal = document.getElementById('adminModal');
-const adminCloseBtn = document.getElementById('adminCloseBtn');
-const checkGitHubBtn = document.getElementById('checkGitHubBtn');
-const saveBtn = document.getElementById('saveBtn');
-const githubStatusEl = document.getElementById('githubStatus');
-const ghTokenInput = document.getElementById('ghToken');
-const ghOwnerInput = document.getElementById('ghOwner');
-const ghRepoInput = document.getElementById('ghRepo');
-
-/* DOM секции «Записи в каталоге» */
-const loadItemsBtn = document.getElementById('loadItemsBtn');
-const itemsStatusEl = document.getElementById('itemsStatus');
-const itemsListEl = document.getElementById('itemsList');
-let adminItemsCache = []; // последний список, загруженный из GitHub
-
-/* Показываем кнопку ➕ только администратору */
-function setAdminVisible() {
-  if (isAdmin && adminOpenBtn) adminOpenBtn.classList.remove('hidden');
-}
-
-function openAdmin() {
-  if (!isAdmin) return;
-  if (ghTokenInput) ghTokenInput.value = localStorage.getItem('gh_token') || '';
-  if (ghOwnerInput) ghOwnerInput.value = localStorage.getItem('gh_owner') || '';
-  if (ghRepoInput) ghRepoInput.value = localStorage.getItem('gh_repo') || CONFIG.repoName;
-  if (githubStatusEl) {
-    githubStatusEl.textContent = '';
-    githubStatusEl.classList.remove('ok', 'err');
-  }
-  adminModal.classList.add('open');
-  adminModal.setAttribute('aria-hidden', 'false');
-  if (tg && tg.BackButton) tg.BackButton.show();
-}
-
-function closeAdmin() {
-  adminModal.classList.remove('open');
-  adminModal.setAttribute('aria-hidden', 'true');
-  if (tg && tg.BackButton) {
-    if (state.cart.size > 0) tg.BackButton.show();
-    else tg.BackButton.hide();
-  }
-}
-
-/* UTF-8-safe base64: кириллица и эмодзи */
-function encodeBase64(str) {
-  const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function decodeBase64(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder('utf-8').decode(bytes);
-}
-
-function setGithubStatus(message, kind) {
-  if (!githubStatusEl) return;
-  githubStatusEl.textContent = message;
-  githubStatusEl.classList.remove('ok', 'err');
-  if (kind === 'ok') githubStatusEl.classList.add('ok');
-  else if (kind === 'err') githubStatusEl.classList.add('err');
-}
-
-function getRepoInputs() {
-  return {
-    token: (ghTokenInput && ghTokenInput.value || '').trim(),
-    owner: (ghOwnerInput && ghOwnerInput.value || '').trim(),
-    repo: (ghRepoInput && ghRepoInput.value || '').trim()
-  };
-}
-
-function saveRepoToLocalStorage() {
-  const r = getRepoInputs();
-  localStorage.setItem('gh_token', r.token);
-  localStorage.setItem('gh_owner', r.owner);
-  localStorage.setItem('gh_repo', r.repo);
-}
-
-function githubHeaders(token) {
-  return {
-    'Authorization': 'Bearer ' + token,
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28'
-  };
-}
-
-async function githubErrorMessage(response) {
-  let message = '';
-  try {
-    const data = await response.json();
-    if (data && data.message) message = data.message;
-  } catch (e) {
-    // ответ не JSON
-  }
-  const text = message ? (response.status + ' ' + message) : ('HTTP ' + response.status);
-  if (response.status === 401) return text + ' — проверьте токен';
-  return text;
-}
-
-const API_LIST_NOUN = CONFIG.jsonPath === 'bloggers.json' ? 'блогеров' : 'товаров';
-
-/* Чтение текущего JSON из репозитория: 200 → массив + sha, 404 → [] + null */
-async function fetchCatalog(owner, repo, token, allowMissing) {
-  const url = 'https://api.github.com/repos/' + encodeURIComponent(owner) +
-    '/' + encodeURIComponent(repo) + '/contents/' + encodeURIComponent(CONFIG.jsonPath) + '?ref=main';
-  const response = await fetch(url, { headers: githubHeaders(token) });
-  if (response.ok) {
-    const meta = await response.json();
-    const arr = JSON.parse(decodeBase64(meta.content));
-    return { items: Array.isArray(arr) ? arr : [], sha: meta.sha };
-  }
-  if (response.status === 404) {
-    if (allowMissing) return { items: [], sha: null };
-    throw new Error(await githubErrorMessage(response));
-  }
-  throw new Error(await githubErrorMessage(response));
-}
-
-async function checkGitHubConnection() {
-  const { token, owner, repo } = getRepoInputs();
-  if (!token || !owner || !repo) {
-    setGithubStatus('Заполните token, owner и repo', 'err');
-    return;
-  }
-  setGithubStatus('Проверяем связь…');
-  try {
-    const { items } = await fetchCatalog(owner, repo, token, false);
-    setGithubStatus('Связь OK: ' + items.length + ' ' + API_LIST_NOUN, 'ok');
-  } catch (err) {
-    setGithubStatus((err && err.message) || 'Ошибка соединения', 'err');
-  }
-}
-
-function collectNewProduct() {
-  const val = (id) => (document.getElementById(id).value || '').trim();
-  const name = val('adminName');
-  const price = Number(document.getElementById('adminPrice').value);
-  if (!name) {
-    setGithubStatus('Укажите название товара', 'err');
-    return null;
-  }
-  if (!Number.isFinite(price) || price < 0) {
-    setGithubStatus('Укажите корректную цену', 'err');
-    return null;
-  }
-
-  const item = {
-    name: name,
-    brand: val('adminBrand'),
-    category: val('adminCategory'),
-    price: price
-  };
-  const oldPrice = Number(document.getElementById('adminOldPrice').value);
-  if (Number.isFinite(oldPrice) && oldPrice > 0) item.oldPrice = oldPrice;
-  const description = val('adminDescription');
-  if (description) item.description = description;
-  const badge = document.getElementById('adminBadge').value;
-  if (badge) item.badge = badge;
-  const emoji = val('adminEmoji');
-  if (emoji) item.emoji = emoji;
-  item.available = document.getElementById('adminAvailable').checked;
-  return item;
-}
-
-async function publishToGitHub(newItem) {
-  const { token, owner, repo } = getRepoInputs();
-  if (!token || !owner || !repo) {
-    setGithubStatus('Заполните token, owner и repo', 'err');
-    return;
-  }
-  saveRepoToLocalStorage();
-
-  let catalog;
-  try {
-    catalog = await fetchCatalog(owner, repo, token, true);
-  } catch (err) {
-    setGithubStatus('Ошибка чтения каталога: ' + ((err && err.message) || 'нет соединения'), 'err');
-    return;
-  }
-
-  const items = catalog.items;
-  newItem.id = items.reduce((maxId, item) => Math.max(maxId, Number(item.id) || 0), 0) + 1;
-  if (newItem.available === undefined) newItem.available = true;
-  items.push(newItem);
-
-  const content = encodeBase64(JSON.stringify(items, null, 2));
-  const putBody = { message: 'Add item via Mini App', content: content };
-  if (catalog.sha) putBody.sha = catalog.sha;
-
-  try {
-    const response = await fetch(
-      'https://api.github.com/repos/' + encodeURIComponent(owner) +
-        '/' + encodeURIComponent(repo) + '/contents/' + encodeURIComponent(CONFIG.jsonPath),
-      {
-        method: 'PUT',
-        headers: Object.assign(githubHeaders(token), { 'Content-Type': 'application/json' }),
-        body: JSON.stringify(putBody)
-      }
-    );
-    if (response.ok) {
-      setGithubStatus('✅ Сохранено! Каталог обновится…', 'ok');
-      showToast('Сохранено!');
-      setTimeout(function () { location.reload(); }, 1800);
-    } else {
-      setGithubStatus('Ошибка: ' + await githubErrorMessage(response), 'err');
-    }
-  } catch (err) {
-    setGithubStatus('Ошибка: ' + ((err && err.message) || 'нет соединения'), 'err');
-  }
-}
-
-/* datalist с существующими категориями */
-function fillCategoryList() {
-  const list = document.getElementById('categoryList');
-  if (!list) return;
-  list.replaceChildren();
-  const categories = [...new Set(state.products.map((p) => p.category).filter(Boolean))];
-  categories.forEach((category) => {
-    const option = document.createElement('option');
-    option.value = category;
-    list.appendChild(option);
-  });
-}
-
-/* ===== Админ: записи в каталоге (загрузка списка и удаление) ===== */
-
-function plural(n, one, few, many) {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
-
-function itemsCountLabel(n) {
-  if (n === 0) return 'Каталог пуст';
-  if (CONFIG.jsonPath === 'bloggers.json') {
-    return n + ' ' + plural(n, 'блогер', 'блогера', 'блогеров');
-  }
-  return n + ' ' + plural(n, 'товар', 'товара', 'товаров');
-}
-
-function setItemsStatus(message, kind) {
-  if (!itemsStatusEl) return;
-  itemsStatusEl.textContent = message;
-  itemsStatusEl.classList.remove('ok', 'err');
-  if (kind === 'ok') itemsStatusEl.classList.add('ok');
-  else if (kind === 'err') itemsStatusEl.classList.add('err');
-}
-
-/* Имя записи для строки списка и подтверждения удаления */
-function adminItemName(item) {
-  if (!item) return 'Без названия';
-  const name = item.name || 'Без названия';
-  const brand = item.brand || '';
-  return brand ? name + ' · ' + brand : name;
-}
-
-/* Дополнительный контекст: категория + цена */
-function adminItemMeta(item) {
-  if (!item) return '';
-  const parts = [];
-  if (item.category) parts.push(item.category);
-  if (item.price !== undefined && item.price !== null && item.price !== '') {
-    parts.push(formatPrice(item.price));
-  }
-  return parts.join(' · ');
-}
-
-/* Загрузка списка записей: token/owner/repo берём из localStorage */
-async function loadItems() {
-  const token = localStorage.getItem('gh_token') || '';
-  const owner = localStorage.getItem('gh_owner') || '';
-  const repo = localStorage.getItem('gh_repo') || '';
-  if (!token || !owner || !repo) {
-    setItemsStatus('Сначала подключите GitHub', 'err');
-    renderItems([]);
-    return;
-  }
-  if (loadItemsBtn) loadItemsBtn.disabled = true;
-  setItemsStatus('Загружаем список…');
-  try {
-    const url = 'https://api.github.com/repos/' + encodeURIComponent(owner) +
-      '/' + encodeURIComponent(repo) + '/contents/' + encodeURIComponent(CONFIG.jsonPath) + '?ref=main';
-    const response = await fetch(url, { headers: githubHeaders(token) });
-    if (response.status === 404) {
-      setItemsStatus('Файл не найден', 'err');
-      renderItems([]);
-      return;
-    }
-    if (response.status === 401 || response.status === 403) {
-      setItemsStatus('Проверьте токен и права (нужно Contents: Read and write)', 'err');
-      renderItems([]);
-      return;
-    }
-    if (!response.ok) {
-      setItemsStatus('Ошибка загрузки: ' + await githubErrorMessage(response), 'err');
-      renderItems([]);
-      return;
-    }
-    const meta = await response.json();
-    const arr = JSON.parse(decodeBase64(meta.content));
-    const items = Array.isArray(arr) ? arr : [];
-    adminItemsCache = items;
-    setItemsStatus(itemsCountLabel(items.length), 'ok');
-    renderItems(items);
-  } catch (err) {
-    setItemsStatus('Ошибка загрузки: ' + ((err && err.message) || 'нет соединения'), 'err');
-  } finally {
-    if (loadItemsBtn) loadItemsBtn.disabled = false;
-  }
-}
-
-/* Рендер строк списка: новые сверху (по убыванию id) */
-function renderItems(items) {
-  if (!itemsListEl) return;
-  itemsListEl.replaceChildren();
-
-  if (items.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'items-empty';
-    empty.textContent = 'Каталог пуст';
-    itemsListEl.appendChild(empty);
-    return;
-  }
-
-  const sorted = items.slice().sort((a, b) => Number(b.id) - Number(a.id));
-  let index = 0;
-  sorted.forEach((item) => {
-    index += 1;
-    const row = document.createElement('div');
-    row.className = 'items-row';
-
-    const num = document.createElement('span');
-    num.className = 'items-num';
-    num.textContent = '#' + ((item.id !== undefined && item.id !== null) ? item.id : index);
-
-    const info = document.createElement('div');
-    info.className = 'items-info';
-
-    const name = document.createElement('span');
-    name.className = 'items-name';
-    name.textContent = adminItemName(item);
-
-    const meta = document.createElement('span');
-    meta.className = 'items-sub';
-    meta.textContent = adminItemMeta(item);
-
-    info.append(name, meta);
-
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'items-del';
-    del.title = 'Удалить';
-    del.setAttribute('aria-label', 'Удалить запись');
-    del.textContent = '🗑';
-    del.dataset.id = String(item.id);
-
-    row.append(num, info, del);
-    itemsListEl.appendChild(row);
-  });
-}
-
-/* Подтверждение: нативный confirm есть и в браузере, и в Telegram WebView */
-function askDeleteConfirm(itemName) {
-  const message = 'Удалить запись «' + itemName + '»? Это действие нельзя отменить.';
-  if (typeof window.confirm === 'function') return window.confirm(message);
-  return false; // без нативного confirm удаление не выполняем (безопасный фолбэк)
-}
-
-/* Удаление записи через Contents API (commit 'Remove item via Mini App') */
-async function removeItem(id) {
-  const target = adminItemsCache.find((item) => Number(item.id) === Number(id));
-  if (!target) {
-    setItemsStatus('Запись не найдена в списке', 'err');
-    return;
-  }
-  if (!askDeleteConfirm(adminItemName(target))) return;
-
-  const { token, owner, repo } = getRepoInputs();
-  if (!token || !owner || !repo) {
-    setItemsStatus('Сначала подключите GitHub', 'err');
-    return;
-  }
-  saveRepoToLocalStorage();
-  setItemsStatus('Удаляем…');
-
-  let catalog;
-  try {
-    catalog = await fetchCatalog(owner, repo, token, false);
-  } catch (err) {
-    setItemsStatus('Ошибка чтения каталога: ' + ((err && err.message) || 'нет соединения'), 'err');
-    return;
-  }
-
-  const nextItems = catalog.items.filter((item) => Number(item.id) !== Number(id));
-  if (nextItems.length === catalog.items.length) {
-    setItemsStatus('Запись #' + id + ' не найдена в репозитории', 'err');
-    return;
-  }
-
-  const content = encodeBase64(JSON.stringify(nextItems, null, 2));
-  const putBody = { message: 'Remove item via Mini App', content: content, sha: catalog.sha };
-
-  try {
-    const response = await fetch(
-      'https://api.github.com/repos/' + encodeURIComponent(owner) +
-        '/' + encodeURIComponent(repo) + '/contents/' + encodeURIComponent(CONFIG.jsonPath),
-      {
-        method: 'PUT',
-        headers: Object.assign(githubHeaders(token), { 'Content-Type': 'application/json' }),
-        body: JSON.stringify(putBody)
-      }
-    );
-    if (response.ok) {
-      setItemsStatus('✅ Запись удалена', 'ok');
-      showToast('Удалено');
-      setTimeout(loadItems, 1500);
-    } else {
-      setItemsStatus('Ошибка: ' + await githubErrorMessage(response), 'err');
-    }
-  } catch (err) {
-    setItemsStatus('Ошибка: ' + ((err && err.message) || 'нет соединения'), 'err');
-  }
-}
-
-/* События админ-панели */
-if (adminOpenBtn) adminOpenBtn.addEventListener('click', openAdmin);
-if (adminCloseBtn) adminCloseBtn.addEventListener('click', closeAdmin);
-if (adminModal) adminModal.addEventListener('click', (event) => {
-  if (event.target && event.target.hasAttribute('data-admin-close')) closeAdmin();
+loadMoreBtn.addEventListener('click', () => {
+  state.limit += PAGE_SIZE;
+  haptic('light');
+  renderCatalog();
 });
-if (checkGitHubBtn) checkGitHubBtn.addEventListener('click', checkGitHubConnection);
-if (saveBtn) {
-  saveBtn.addEventListener('click', async () => {
-    if (saveBtn.disabled) return;
-    saveRepoToLocalStorage();
-    const item = collectNewProduct();
-    if (!item) return;
-    saveBtn.disabled = true;
-    try {
-      await publishToGitHub(item);
-    } finally {
-      saveBtn.disabled = false;
-    }
-  });
-}
-if (loadItemsBtn) loadItemsBtn.addEventListener('click', loadItems);
-if (itemsListEl) {
-  itemsListEl.addEventListener('click', (event) => {
-    const btn = event.target.closest ? event.target.closest('.items-del') : null;
-    if (btn && btn.dataset && btn.dataset.id) removeItem(btn.dataset.id);
-  });
-}
+
+emptyResetBtn.addEventListener('click', () => {
+  haptic('light');
+  resetFilters();
+});
+
+/* Горячие клавиши (десктоп) */
+document.addEventListener('keydown', handleHotkey);
 
 /* ===== Старт ===== */
+applyTheme();
 initTelegram();
-setAdminVisible();
+updateSearchClear();
+updateResetBtn();
 loadProducts();
